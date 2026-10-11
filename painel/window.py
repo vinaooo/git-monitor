@@ -8,6 +8,7 @@ from .group_page import GroupPage
 from .groups import Groups
 from .motion import Slot
 from .prefs import Prefs
+from .sorting import sorted_order
 from .titles import TitleStore
 
 
@@ -30,12 +31,17 @@ class Window(Adw.ApplicationWindow):
             for repo in self.groups.repos(group):
                 self._add_card(repo, group)
         self._apply_layout()
+        self._apply_view()
+        self._apply_sort()
         self._update_actions()
         self.refresh()
         self.tab_view.connect('notify::selected-page', lambda *_: self.refresh())  # new tab: refresh at once
         self.restart_timer()
         settings.connect('changed::refresh-seconds', lambda *_: self.restart_timer())
         settings.connect('changed::layout', lambda *_: self._apply_layout())
+        settings.connect('changed::view', lambda *_: self._apply_view())
+        for key in ('sort', 'sort-reverse'):
+            settings.connect(f'changed::{key}', lambda *_: self._apply_sort())
 
     # --- ui construction ---
     def _build_ui(self, app):
@@ -75,6 +81,8 @@ class Window(Adw.ApplicationWindow):
         content_header.pack_start(refresh)
         self.content_menu = Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu)  # tabs layout only
         content_header.pack_end(self.content_menu)
+        content_header.pack_end(Gtk.MenuButton(icon_name='view-grid-symbolic', always_show_arrow=True,
+                                               tooltip_text='View and sort', menu_model=self._build_view_menu()))
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         content.append(self.tab_bar)
         content.append(self.tab_view)
@@ -98,6 +106,23 @@ class Window(Adw.ApplicationWindow):
         self.split = Adw.OverlaySplitView(sidebar=sidebar_view, content=self.toasts, show_sidebar=False,
                                           max_sidebar_width=260)
         self.set_content(self.split)
+
+    def _build_view_menu(self):
+        for key in ('sort', 'sort-reverse', 'view'):  # stateful actions backed by GSettings
+            self.add_action(self.settings.create_action(key))
+        menu = Gio.Menu()
+        sort = Gio.Menu()
+        for label, mode in (('Manual order', 'manual'), ('Name', 'name'), ('Open issues', 'issues'),
+                            ('Pending PRs/MRs', 'prs'), ('CI status', 'ci')):
+            sort.append(label, f'win.sort::{mode}')
+        sort.append('Reverse order', 'win.sort-reverse')
+        menu.append_section('Sort by', sort)
+        view = Gio.Menu()
+        for label, mode in (('Small cards', 'grid-small'), ('Medium cards', 'grid-medium'),
+                            ('Large cards', 'grid-large'), ('List', 'list')):
+            view.append(label, f'win.view::{mode}')
+        menu.append_section('View', view)
+        return menu
 
     def _build_sidebar(self):
         factory = Gtk.SignalListItemFactory()
@@ -126,6 +151,20 @@ class Window(Adw.ApplicationWindow):
         self.content_menu.set_visible(not sidebar)  # the sidebar header carries the menu otherwise
         self.split.set_show_sidebar(sidebar)
 
+    # --- view and sort (live: re-sorted whenever a refresh brings new numbers) ---
+    def _apply_view(self):
+        columns = {'grid-small': 6, 'grid-medium': 4, 'grid-large': 2, 'list': 1}
+        mode = self.settings.get_string('view')
+        for page in self.pages.values():
+            page.set_view(columns[mode], mode == 'list')
+
+    def _apply_sort(self, group=None):
+        mode, reverse = self.settings.get_string('sort'), self.settings.get_boolean('sort-reverse')
+        for name in [group] if group else list(self.pages):
+            order = [i for i in self.groups.repos(name) if i in self.cards]  # cards are created one by one at startup
+            info = {i: (self.cards[i].title.get_label(), self.cards[i].status) for i in order}
+            self.pages[name].apply_order(sorted_order(order, mode, reverse, info))
+
     # --- groups ---
     def _tab_order(self):
         return [self.tab_view.get_nth_page(i).get_child().name for i in range(self.tab_view.get_n_pages())]
@@ -144,7 +183,7 @@ class Window(Adw.ApplicationWindow):
             self.actions['rename-group'].set_enabled(True)
 
     def _make_page(self, group):
-        page = GroupPage(group, self.groups)
+        page = GroupPage(group, self.groups, can_reorder=lambda: self.settings.get_string('sort') == 'manual')
         self.pages[group] = page
         self.tab_view.append(page).set_title(group)
         return page
@@ -219,6 +258,7 @@ class Window(Adw.ApplicationWindow):
                     self.titles.get(ident), other_groups=self.other_groups, on_move=self.move_to_group)
         self.cards[ident] = card
         self.pages[group].add_slot(ident, Slot(card))
+        self._apply_sort(group)
 
     def ask_repo(self, *_):
         entry = Gtk.Entry(placeholder_text='GitHub/GitLab URL or owner/name', activates_default=True)
@@ -246,6 +286,7 @@ class Window(Adw.ApplicationWindow):
     def rename_repo(self, name, title):
         self.titles.set(name, title)
         self.cards[name].set_custom_title(self.titles.get(name))
+        self._apply_sort(self.groups.group_of(name))
 
     def remove_repo(self, name):
         self.titles.remove(name)
@@ -271,6 +312,7 @@ class Window(Adw.ApplicationWindow):
         slot = self.pages[old].remove_slot(ident)
         self.groups.move_repo(ident, group)
         self.pages[group].add_slot(ident, slot)
+        self._apply_sort(group)
         self.toasts.add_toast(Adw.Toast(title=f'Moved to {group}'))
 
     # --- drag routing (a card may have changed group since its callbacks were bound) ---
@@ -306,6 +348,7 @@ class Window(Adw.ApplicationWindow):
         card = self.cards.get(name)  # may have been removed meanwhile
         if card:
             card.update(data)
+            self._apply_sort(self.groups.group_of(name))
 
     def show_prefs(self):
         Prefs(self.settings, self.tokens, self.cards,

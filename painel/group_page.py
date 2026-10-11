@@ -7,9 +7,10 @@ from .ordering import move
 class GroupPage(Gtk.Stack):
     """One group's grid of cards, with the live drag-reorder preview (blank slot + FLIP animation)."""
 
-    def __init__(self, name, groups):
+    def __init__(self, name, groups, can_reorder=lambda: True):
         super().__init__()
         self.name, self.groups, self.dragging, self.slots = name, groups, None, {}
+        self.can_reorder, self.compact = can_reorder, False
         self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, valign=Gtk.Align.START,
                                 min_children_per_line=1, max_children_per_line=4,
                                 homogeneous=True, margin_top=12, margin_bottom=12,
@@ -29,6 +30,7 @@ class GroupPage(Gtk.Stack):
 
     def add_slot(self, ident, slot):
         self.slots[ident] = slot
+        slot.card.set_compact(self.compact)
         self.flow.append(slot)
         self._sync()
 
@@ -63,17 +65,31 @@ class GroupPage(Gtk.Stack):
         self.dragging = ident
 
     def drag_over(self, x, y):
+        if not self.can_reorder():  # a sort mode owns the order
+            return
         child = self.flow.get_child_at_pos(x, y)
         if self.dragging and child and child.get_child().card.ident != self.dragging:
             order = move(self._flow_order(), self.dragging, child.get_child().card.ident)
             self.animator.run(lambda: self._show_order(order, self.dragging))
 
     def drag_dropped(self):
-        if self.dragging:
+        if self.dragging and self.can_reorder():
             self.groups.set_order(self.name, self._flow_order())
 
     def drag_finished(self):
         self.dragging = None
         saved = [r for r in self.groups.repos(self.name) if r in self.slots]
-        if saved and self._flow_order() != saved:  # drag cancelled: undo the preview
+        if self.can_reorder() and saved and self._flow_order() != saved:  # drag cancelled: undo the preview
             self.animator.run(lambda: self._show_order(saved, saved[0]))
+
+    def apply_order(self, order):
+        """Show `order` (animated); ignored while a drag is previewing its own order."""
+        order = [i for i in order if i in self.slots]
+        if order and not self.dragging and order != self._flow_order():
+            self.animator.run(lambda: self._show_order(order, order[0]))
+
+    def set_view(self, max_columns, compact):
+        self.flow.set_max_children_per_line(max_columns)
+        self.compact = compact
+        for slot in self.slots.values():
+            slot.card.set_compact(compact)
