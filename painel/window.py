@@ -367,6 +367,15 @@ class Window(Adw.ApplicationWindow):
         dlg.add_response('add', 'Add')
         dlg.set_response_appearance('add', Adw.ResponseAppearance.SUGGESTED)
         dlg.set_default_response('add')
+        dlg.set_response_enabled('add', False)  # until the text parses as a repository
+
+        def validate(_entry):
+            text = entry.get_text()
+            ok = bool(repo_id.parse(text))
+            dlg.set_response_enabled('add', ok)
+            (entry.remove_css_class if ok or not text.strip() else entry.add_css_class)('error')
+
+        entry.connect('changed', validate)
         dlg.connect('response', lambda d, r: r == 'add' and self.add_repo(entry.get_text()))
         dlg.present(self)
 
