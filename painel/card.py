@@ -1,8 +1,10 @@
-from gi.repository import Adw, Gdk, Gtk
+from gi.repository import Adw, Gdk, Gtk, Pango
 
-from .chips import chips_for
+from .chips import Chip, chips_for
 from .health import severity
 
+TEXT_CHARS = 26
+LOADING_CHIPS = [('CI', [Chip('…', 'dim-label', '')]), ('PRs', [Chip('…', 'dim-label', '')])]
 HEALTH_CLASSES = ('health-error', 'health-warning', 'health-accent', 'health-success')
 
 
@@ -16,10 +18,13 @@ class Card(Gtk.Box):
         self.ident, self.url, self.fetched_name, self.custom_title = full_name, None, full_name, custom_title
         self.status = None  # last RepoStatus, used by the sort menu
         self.on_rename = lambda text: on_rename(full_name, text)
-        self.title = Gtk.Label(label=custom_title or full_name, xalign=0, wrap=True, hexpand=True)
+        # width is capped so a long name (or the host-prefixed identity shown before the first fetch) cannot widen
+        # every card: FlowBox sizes the grid from the widest natural width
+        self.title = Gtk.Label(label=custom_title or full_name.partition('/')[2], xalign=0, wrap=True,
+                               wrap_mode=Pango.WrapMode.WORD_CHAR, max_width_chars=TEXT_CHARS, hexpand=True)
         self.title.add_css_class('title-3')
         title_row = self._build_title_row()
-        self.stats = Gtk.Label(label='Loading…', xalign=0)
+        self.stats = Gtk.Label(label='Loading…', xalign=0, wrap=True, max_width_chars=TEXT_CHARS)  # errors can be long
         self.chips = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)  # one wrapping row per group
         open_btn = Gtk.Button(label='Open in browser', halign=Gtk.Align.START)
         open_btn.connect('clicked', self._open)
@@ -38,6 +43,7 @@ class Card(Gtk.Box):
         for s in ('top', 'bottom', 'start', 'end'):
             getattr(box, f'set_margin_{s}')(12)
         self.append(box)
+        self._set_chips(LOADING_CHIPS)  # same rows as loaded: the card keeps its size when data arrives
         self._setup_drag_and_drop(full_name, on_drag_begin, on_drag_end)
         self._setup_group_menu(other_groups, on_move)
 
