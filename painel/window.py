@@ -55,7 +55,8 @@ class Window(Adw.ApplicationWindow):
                               ('Delete group…', 'delete-group')):
             section.append(label, f'win.{action}')
         menu.append_section(None, section)
-        menu.append_section(None, app.menu)
+        for i in range(app.menu.get_n_items()):  # flatten: a section of sections loses its separators
+            menu.append_section(None, app.menu.get_item_link(i, Gio.MENU_LINK_SECTION))
         self.actions = {}
         for name, cb in (('new-group', self.ask_new_group), ('rename-group', self.ask_rename_group),
                          ('delete-group', lambda *_: self.tab_view.close_page(self.tab_view.get_selected_page()))):
@@ -84,8 +85,10 @@ class Window(Adw.ApplicationWindow):
         act.connect('activate', self.ask_repo)
         self.add_action(act)
         add = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='Add repository', action_name='win.add-repo')
-        refresh = Gtk.Button(icon_name='view-refresh-symbolic', tooltip_text='Refresh')
-        refresh.connect('clicked', lambda *_: self.refresh())
+        act = Gio.SimpleAction.new('refresh', None)
+        act.connect('activate', lambda *_: self.refresh())
+        self.add_action(act)
+        refresh = Gtk.Button(icon_name='view-refresh-symbolic', tooltip_text='Refresh', action_name='win.refresh')
         self.sidebar_toggle = Gtk.ToggleButton(icon_name='sidebar-show-symbolic', tooltip_text='Groups', visible=False)
         content_header.pack_start(self.sidebar_toggle)
         content_header.pack_start(add)
