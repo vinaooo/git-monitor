@@ -303,7 +303,8 @@ class Window(Adw.ApplicationWindow):
     # --- repos ---
     def _add_card(self, ident, group):
         card = Card(ident, self.remove_repo, self.rename_repo, self.drag_started, self.drag_finished,
-                    self.titles.get(ident), other_groups=self.other_groups, on_move=self.move_to_group)
+                    self.titles.get(ident), other_groups=self.other_groups, on_move=self.move_to_group,
+                    can_drag=lambda: self.settings.get_string('sort') == 'manual')
         self.cards[ident] = card
         self.pages[group].add_slot(ident, Slot(card))
         self._apply_sort(group)

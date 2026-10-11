@@ -1,7 +1,11 @@
+import logging
+
 from gi.repository import Adw, Gdk, GObject, Gtk
 
 from .motion import FlipAnimator
 from .ordering import move
+
+log = logging.getLogger('painel.drag')
 
 
 class GroupPage(Gtk.Stack):
@@ -18,8 +22,8 @@ class GroupPage(Gtk.Stack):
         self.animator = FlipAnimator(self.flow, self.slots)
         drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
         drop.connect('motion', lambda _t, x, y: self.drag_over(x, y) or Gdk.DragAction.MOVE)
-        drop.connect('drop', lambda *_: self.drag_dropped() or True)
-        self.flow.add_controller(drop)
+        drop.connect('drop', lambda *_: self.drag_dropped() or bool(self.dragging))
+        self.add_controller(drop)  # whole page, not just the cards: margins and gaps must not cancel the drop
         self.add_named(Adw.StatusPage(title='Empty group', icon_name='io.github.vina.Painel-symbolic',
                                       description='Add a repository, or drag a card onto this group.'), 'empty')
         self.add_named(Gtk.ScrolledWindow(child=self.flow), 'list')
@@ -62,29 +66,46 @@ class GroupPage(Gtk.Stack):
             self.flow.insert(children[i], n) if n < pos else self.flow.append(children[i])
 
     def drag_started(self, ident):
+        log.debug('drag started: %s', ident)
         self.dragging = ident
 
     def _card_slot_at(self, x, y):
-        """Our FlowBoxChild under (x, y). get_child_at_pos can hand back a FlowBoxChild of a *nested*
-        FlowBox (the card's chips), so climb to the direct child of our own flow."""
-        child = self.flow.get_child_at_pos(x, y)
-        while child and child.get_parent() is not self.flow:
-            child = child.get_parent()
-        return child
+        """Our FlowBoxChild nearest to (x, y) in page coordinates, so margins and gaps (e.g. above the first row)
+        still target a card. get_child_at_pos can hand back a FlowBoxChild of a *nested* FlowBox (the card's
+        chips), so we measure our own direct children instead."""
+        point = self.translate_coordinates(self.flow, x, y)
+        if not point:
+            return None
+        px, py = point
+        best, child = None, self.flow.get_first_child()
+        while child:
+            ok, b = child.compute_bounds(self.flow)
+            if ok:
+                dx = max(b.get_x() - px, 0, px - b.get_x() - b.get_width())
+                dy = max(b.get_y() - py, 0, py - b.get_y() - b.get_height())
+                if best is None or dx * dx + dy * dy < best[0]:
+                    best = (dx * dx + dy * dy, child)
+            child = child.get_next_sibling()
+        return best and best[1]
 
     def drag_over(self, x, y):
         if not self.can_reorder():  # a sort mode owns the order
             return
         child = self._card_slot_at(x, y)
-        if self.dragging and child and child.get_child().card.ident != self.dragging:
-            order = move(self._flow_order(), self.dragging, child.get_child().card.ident)
+        target = child and child.get_child().card.ident
+        if self.dragging and target and target != self.dragging:
+            order = move(self._flow_order(), self.dragging, target)
+            log.debug('over %s: preview %s', target, [i[-8:] for i in order])
             self.animator.run(lambda: self._show_order(order, self.dragging))
 
     def drag_dropped(self):
+        log.debug('drop: dragging=%s can_reorder=%s order=%s', self.dragging, self.can_reorder(),
+                  [i[-8:] for i in self._flow_order()])
         if self.dragging and self.can_reorder():
             self.groups.set_order(self.name, self._flow_order())
 
     def drag_finished(self):
+        log.debug('drag finished: dragging=%s stored=%s', self.dragging, self.groups.repos(self.name))
         self.dragging = None
         saved = [r for r in self.groups.repos(self.name) if r in self.slots]
         if self.can_reorder() and saved and self._flow_order() != saved:  # drag cancelled: undo the preview

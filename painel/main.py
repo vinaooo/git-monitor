@@ -1,3 +1,5 @@
+import logging
+import os
 import sys
 
 import gi
@@ -42,4 +44,5 @@ class App(Adw.Application):
 
 
 def main():
+    logging.basicConfig(level=logging.DEBUG if os.environ.get('PAINEL_DEBUG') else logging.WARNING)
     return App().run(sys.argv)
