@@ -4,6 +4,7 @@ from gi.repository import Adw, Gdk, GLib, GObject, Gtk
 
 from . import repo_id
 from .card import Card
+from .motion import FlipAnimator, Slot
 from .ordering import move
 from .prefs import Prefs
 from .titles import TitleStore
@@ -12,7 +13,7 @@ class Window(Adw.ApplicationWindow):
     def __init__(self, app, settings, service, tokens):
         super().__init__(application=app, title='Painel', default_width=800, default_height=600)
         self.settings, self.service, self.tokens = settings, service, tokens
-        self.cards, self.dragging = {}, None
+        self.cards, self.slots, self.dragging = {}, {}, None
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
         self.timer = 0
@@ -31,6 +32,7 @@ class Window(Adw.ApplicationWindow):
                                 min_children_per_line=1, max_children_per_line=4,
                                 homogeneous=True, margin_top=12, margin_bottom=12,
                                 margin_start=12, margin_end=12)
+        self.animator = FlipAnimator(self.flow, self.slots)
         self.empty = Adw.StatusPage(title='No repositories', icon_name='io.github.vina.Painel-symbolic',
                                     description='Add a GitHub or GitLab URL with the + button.')
         self.stack = Gtk.Stack()
@@ -66,7 +68,8 @@ class Window(Adw.ApplicationWindow):
     def _add_card(self, name):
         card = Card(name, self.remove_repo, self.rename_repo, self.drag_started, self.drag_finished, self.titles.get(name))
         self.cards[name] = card
-        self.flow.append(card)
+        self.slots[name] = Slot(card)
+        self.flow.append(self.slots[name])
 
     def ask_repo(self, *_):
         entry = Gtk.Entry(placeholder_text='GitHub/GitLab URL or owner/name',
@@ -96,13 +99,13 @@ class Window(Adw.ApplicationWindow):
     def _flow_order(self):
         order, child = [], self.flow.get_first_child()
         while child:
-            order.append(child.get_child().ident)
+            order.append(child.get_child().card.ident)
             child = child.get_next_sibling()
         return order
 
     def _show_order(self, order, anchor):
         """Re-sequence the flow without reparenting `anchor` (moving the drag source would abort the drag)."""
-        children = {i: self.cards[i].get_parent() for i in order}
+        children = {i: self.slots[i].get_parent() for i in order}
         for i in order:
             if i != anchor:
                 self.flow.remove(children[i])
@@ -117,9 +120,9 @@ class Window(Adw.ApplicationWindow):
 
     def drag_over(self, x, y):
         child = self.flow.get_child_at_pos(x, y)
-        if self.dragging and child and child.get_child().ident != self.dragging:
-            order = move(self._flow_order(), self.dragging, child.get_child().ident)
-            self._show_order(order, self.dragging)
+        if self.dragging and child and child.get_child().card.ident != self.dragging:
+            order = move(self._flow_order(), self.dragging, child.get_child().card.ident)
+            self.animator.run(lambda: self._show_order(order, self.dragging))
 
     def drag_dropped(self):
         self.settings.set_strv('repos', self._flow_order())
@@ -128,7 +131,7 @@ class Window(Adw.ApplicationWindow):
         self.dragging = None
         saved = self.settings.get_strv('repos')
         if self._flow_order() != saved:  # drag cancelled: undo the preview
-            self._show_order(saved, saved[0])
+            self.animator.run(lambda: self._show_order(saved, saved[0]))
 
     def rename_repo(self, name, title):
         self.titles.set(name, title)
@@ -137,7 +140,7 @@ class Window(Adw.ApplicationWindow):
     def remove_repo(self, name):
         self.titles.remove(name)
         card = self.cards.pop(name)
-        self.flow.remove(card.get_parent())
+        self.flow.remove(self.slots.pop(name).get_parent())
         self.settings.set_strv('repos', [r for r in self.settings.get_strv('repos') if r != name])
         self._sync_stack()
 
