@@ -16,6 +16,7 @@ tab.tint-warning:selected, row.tint-warning:selected   { background: alpha(mix(@
 tab.tint-accent:selected, row.tint-accent:selected     { background: alpha(mix(@blue_3, white, .4), .52); }
 tab.tint-success:selected, row.tint-success:selected   { background: alpha(mix(@success_color, white, .4), .44); }
 .chip { padding: 1px 9px; border-radius: 99px; font-size: smaller; font-weight: 600; }
+.chip-link:hover { filter: brightness(1.25); }
 .chip.error      { color: @error_color;   background: alpha(@error_color, .15); }
 .chip.warning    { color: @warning_color; background: alpha(@warning_color, .15); }
 .chip.accent     { color: @blue_2;        background: alpha(@blue_3, .22); }  /* fixed blue: the user's accent may be gray/green */
