@@ -1,13 +1,15 @@
 """Card ordering for the sort menu. Pure: works on (title, RepoStatus|None) pairs."""
 
-_CI_RANK = {'failure': 0, 'running': 1, 'cancelled': 2, 'success': 3, 'none': 4}
+from .health import severity
+
+_HEALTH_RANK = {'error': 0, 'warning': 1, 'accent': 2, 'success': 3, 'none': 4}
 
 # mode -> (key(title, status), natural direction is descending?)
 _MODES = {
     'name': (lambda title, s: title.casefold(), False),
     'issues': (lambda title, s: s.issues, True),
     'prs': (lambda title, s: s.prs, True),
-    'ci': (lambda title, s: _CI_RANK.get(s.ci, len(_CI_RANK)), False),
+    'ci': (lambda title, s: _HEALTH_RANK[severity(s)], False),  # "Health" in the menu: worst first
 }
 
 

@@ -20,6 +20,10 @@ class HttpClient:
     def get(self, url, headers=None):
         raise NotImplementedError
 
+    def post(self, url, body, headers=None):
+        """POST a JSON body (GraphQL)."""
+        raise NotImplementedError
+
 
 _CREDENTIAL_HEADERS = ('authorization', 'private-token')
 
@@ -40,7 +44,14 @@ _opener = urllib.request.build_opener(_SafeRedirect)
 
 class UrllibClient(HttpClient):
     def get(self, url, headers=None):
-        req = urllib.request.Request(url, headers={'User-Agent': 'painel', **(headers or {})})
+        return self._send(urllib.request.Request(url, headers={'User-Agent': 'painel', **(headers or {})}))
+
+    def post(self, url, body, headers=None):
+        return self._send(urllib.request.Request(
+            url, data=json.dumps(body).encode(), method='POST',
+            headers={'User-Agent': 'painel', 'Content-Type': 'application/json', **(headers or {})}))
+
+    def _send(self, req):
         try:
             with _opener.open(req, timeout=15) as r:
                 return json.load(r), r.headers
