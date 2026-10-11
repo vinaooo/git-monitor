@@ -64,10 +64,18 @@ class GroupPage(Gtk.Stack):
     def drag_started(self, ident):
         self.dragging = ident
 
+    def _card_slot_at(self, x, y):
+        """Our FlowBoxChild under (x, y). get_child_at_pos can hand back a FlowBoxChild of a *nested*
+        FlowBox (the card's chips), so climb to the direct child of our own flow."""
+        child = self.flow.get_child_at_pos(x, y)
+        while child and child.get_parent() is not self.flow:
+            child = child.get_parent()
+        return child
+
     def drag_over(self, x, y):
         if not self.can_reorder():  # a sort mode owns the order
             return
-        child = self.flow.get_child_at_pos(x, y)
+        child = self._card_slot_at(x, y)
         if self.dragging and child and child.get_child().card.ident != self.dragging:
             order = move(self._flow_order(), self.dragging, child.get_child().card.ident)
             self.animator.run(lambda: self._show_order(order, self.dragging))
