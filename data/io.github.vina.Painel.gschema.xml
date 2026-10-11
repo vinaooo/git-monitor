@@ -2,6 +2,7 @@
 <schemalist>
   <schema id="io.github.vina.Painel" path="/io/github/vina/Painel/">
     <key name="repos" type="as"><default>[]</default><summary>Monitored repositories (owner/name)</summary></key>
+    <key name="titles" type="a{ss}"><default>{}</default><summary>Custom card titles by repository</summary></key>
     <key name="refresh-seconds" type="i"><range min="15" max="3600"/><default>60</default><summary>Auto refresh interval</summary></key>
   </schema>
 </schemalist>
