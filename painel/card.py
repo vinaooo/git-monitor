@@ -10,13 +10,14 @@ HEALTH_CLASSES = ('health-error', 'health-warning', 'health-accent', 'health-suc
 
 class Card(Gtk.Box):
     def __init__(self, full_name, on_remove, on_rename, on_drag_begin, on_drag_end, custom_title=None,
-                 other_groups=lambda ident: [], on_move=lambda ident, group: None):
+                 other_groups=lambda ident: [], on_move=lambda ident, group: None, can_drag=lambda: True):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.add_css_class('card')
         for s in ('top', 'bottom', 'start', 'end'):
             getattr(self, f'set_margin_{s}')(6)
         self.ident, self.url, self.fetched_name, self.custom_title = full_name, None, full_name, custom_title
         self.status = None  # last RepoStatus, used by the sort menu
+        self.grab_point, self.can_drag = (0, 0), can_drag
         self.on_rename = lambda text: on_rename(full_name, text)
         # width is capped so a long name (or the host-prefixed identity shown before the first fetch) cannot widen
         # every card: FlowBox sizes the grid from the widest natural width
@@ -57,7 +58,7 @@ class Card(Gtk.Box):
 
     def _setup_drag_and_drop(self, ident, on_drag_begin, on_drag_end):
         source = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
-        source.connect('prepare', lambda *_: Gdk.ContentProvider.new_for_value(ident))
+        source.connect('prepare', lambda _src, x, y: self._on_prepare(ident, x, y))
         source.connect('drag-begin', lambda src, _drag: self._on_drag_begin(src, ident, on_drag_begin))
         source.connect('drag-end', lambda *_: self._on_drag_end(ident, on_drag_end))
         self.add_controller(source)
@@ -83,9 +84,15 @@ class Card(Gtk.Box):
             box.append(btn)
         popover.popup()
 
+    def _on_prepare(self, ident, x, y):
+        if not self.can_drag():  # a sort mode owns the order: no drag at all
+            return None
+        self.grab_point = (int(x), int(y))  # where inside the card the press happened
+        return Gdk.ContentProvider.new_for_value(ident)
+
     def _on_drag_begin(self, source, ident, callback):
         # static snapshot as drag icon, then blank the card: the empty slot is the live drop preview
-        source.set_icon(Gtk.WidgetPaintable.new(self).get_current_image(), 0, 0)
+        source.set_icon(Gtk.WidgetPaintable.new(self).get_current_image(), *self.grab_point)  # hotspot = grab point: no jump
         self.set_opacity(0)
         callback(ident)
 
