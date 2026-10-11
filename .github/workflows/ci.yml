@@ -60,3 +60,14 @@ jobs:
           manifest-path: io.github.vina.Painel.yml
           cache-key: flatpak-builder-${{ github.sha }}
           restore-cache: true
+
+  dnd-headless:
+    runs-on: ubuntu-latest
+    continue-on-error: true  # new and possibly flaky: informational until stable
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: >
+          sudo apt-get update && sudo apt-get install -y gnome-shell mutter dbus-user-session
+          python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1 gir1.2-graphene-1.0 libglib2.0-dev-bin
+      - run: tools/headless-gnome/dnd-test.sh | tee dnd.log; grep -q '^RESULT OK' dnd.log  # the script's own exit code is grep's
