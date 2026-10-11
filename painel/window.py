@@ -17,7 +17,7 @@ class Window(Adw.ApplicationWindow):
     def __init__(self, app, settings, service, tokens):
         super().__init__(application=app, title='Painel', default_width=900, default_height=600)
         self.settings, self.service, self.tokens = settings, service, tokens
-        self.cards, self.pages, self.timer, self._dot_cache = {}, {}, 0, {}
+        self.cards, self.pages, self.timer = {}, {}, 0
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
         initial = settings.get_value('groups').unpack()
@@ -42,7 +42,6 @@ class Window(Adw.ApplicationWindow):
         settings.connect('changed::layout', lambda *_: self._apply_layout())
         settings.connect('changed::view', lambda *_: self._apply_view())
         settings.connect('changed::refresh-all-groups', lambda *_: self._update_marks())
-        Adw.StyleManager.get_default().connect('notify::dark', lambda *_: (self._dot_cache.clear(), self._update_marks()))
         for key in ('sort', 'sort-reverse'):
             settings.connect(f'changed::{key}', lambda *_: self._apply_sort())
 
@@ -64,7 +63,9 @@ class Window(Adw.ApplicationWindow):
 
         self.tab_view = Adw.TabView(vexpand=True)
         self.tab_view.connect('close-page', self._on_close_page)
-        self.tab_view.connect('page-reordered', lambda *_: self.groups.set_group_order(self._tab_order()))
+        self.tab_view.connect('page-reordered', lambda *_: (self.groups.set_group_order(self._tab_order()),
+                                                            GLib.idle_add(self._tint_tabs)))
+        self.tab_view.connect('page-attached', lambda *_: GLib.idle_add(self._tint_tabs))  # tab widgets appear after this
         self.tab_view.connect('notify::selected-page', lambda *_: self._update_actions())
         self.tab_bar = Adw.TabBar(view=self.tab_view, autohide=False)
         new_tab = Gtk.Button(icon_name='tab-new-symbolic', tooltip_text='New group', css_classes=['flat'])
@@ -131,8 +132,7 @@ class Window(Adw.ApplicationWindow):
         factory = Gtk.SignalListItemFactory()
 
         def setup(_f, item):
-            row = Gtk.Box(spacing=8, margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
-            row.append(Gtk.Image(pixel_size=12))  # health dot, mirrors the tab page icon
+            row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
             row.append(Gtk.Label(xalign=0, hexpand=True))
             drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
             drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident))
@@ -140,14 +140,22 @@ class Window(Adw.ApplicationWindow):
             item.set_child(row)
 
         def bind(_f, item):
-            dot, label = item.get_child().get_first_child(), item.get_child().get_last_child()
-            sync = GObject.BindingFlags.SYNC_CREATE
-            item.bindings = [item.get_item().bind_property('title', label, 'label', sync),
-                             item.get_item().bind_property('icon', dot, 'gicon', sync)]
+            page, row = item.get_item(), item.get_child()
+            item.bindings = [page.bind_property('title', row.get_first_child(), 'label', GObject.BindingFlags.SYNC_CREATE)]
+            def tint(*_):
+                if row.get_parent():  # the ListView row widget; not parented yet while binding
+                    self._set_tint(row.get_parent(), page.get_keyword())
+
+            item.tint_handler = page.connect('notify::keyword', tint)
+            GLib.idle_add(tint)
+
+        def unbind(_f, item):
+            [b.unbind() for b in item.bindings]
+            item.get_item().disconnect(item.tint_handler)
 
         factory.connect('setup', setup)
         factory.connect('bind', bind)
-        factory.connect('unbind', lambda _f, item: [b.unbind() for b in item.bindings])
+        factory.connect('unbind', unbind)
         lst = Gtk.ListView(model=self.tab_view.get_pages(), factory=factory)
         lst.add_css_class('navigation-sidebar')
         return lst
@@ -172,23 +180,38 @@ class Window(Adw.ApplicationWindow):
             info = {i: (self.cards[i].title.get_label(), self.cards[i].status) for i in order}
             self.pages[name].apply_order(sorted_order(order, mode, reverse, info))
 
-    # --- group health dot on the tab / sidebar row (only meaningful while every group is refreshed) ---
-    _DOT_COLORS = {'error': 'error_color', 'warning': 'warning_color', 'accent': 'blue_3', 'success': 'success_color'}
+    # --- group health tint on the tab / sidebar row (only meaningful while every group is refreshed) ---
+    _TINTS = ('tint-error', 'tint-warning', 'tint-accent', 'tint-success')
 
-    def _dot_icon(self, sev):
-        if sev not in self._dot_cache:
-            ok, c = self.get_style_context().lookup_color(self._DOT_COLORS[sev])  # follows the user's theme
-            rgb = '#%02x%02x%02x' % tuple(min(255, max(0, round(v * 255))) for v in (c.red, c.green, c.blue))  # themes can give >1 if ok else '#888888'
-            svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6" fill="{rgb}"/></svg>'
-            self._dot_cache[sev] = Gio.BytesIcon.new(GLib.Bytes.new(svg.encode()))
-        return self._dot_cache[sev]
+    @classmethod
+    def _set_tint(cls, widget, sev):
+        for css in cls._TINTS:
+            widget.remove_css_class(css)
+        if sev and sev != 'none':
+            widget.add_css_class(f'tint-{sev}')
 
     def _update_marks(self):
         every = self.settings.get_boolean('refresh-all-groups')
         for name, page in self.pages.items():
             sev = group_severity([severity(self.cards[i].status) for i in self.groups.repos(name) if i in self.cards]) \
                 if every else 'none'
-            self.tab_view.get_page(page).set_icon(self._dot_icon(sev) if sev != 'none' else None)
+            self.tab_view.get_page(page).set_keyword(sev)  # carries the severity: sidebar rows follow its notify
+        self._tint_tabs()
+
+    def _tint_tabs(self):
+        """AdwTabBar has no per-tab API, so find its internal `tab` widgets and tag them by page."""
+        def walk(widget):
+            yield widget
+            child = widget.get_first_child()
+            while child:
+                yield from walk(child)
+                child = child.get_next_sibling()
+
+        for widget in walk(self.tab_bar):
+            if widget.get_css_name() == 'tab' and widget.find_property('page'):
+                page = widget.get_property('page')
+                if page:
+                    self._set_tint(widget, page.get_keyword())
 
     # --- groups ---
     def _tab_order(self):
