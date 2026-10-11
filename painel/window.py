@@ -32,6 +32,7 @@ class Window(Adw.ApplicationWindow):
         self._apply_layout()
         self._update_actions()
         self.refresh()
+        self.tab_view.connect('notify::selected-page', lambda *_: self.refresh())  # new tab: refresh at once
         self.restart_timer()
         settings.connect('changed::refresh-seconds', lambda *_: self.restart_timer())
         settings.connect('changed::layout', lambda *_: self._apply_layout())
@@ -276,8 +277,10 @@ class Window(Adw.ApplicationWindow):
                                               lambda: self.refresh() or True)
 
     def refresh(self):
+        if not self.tab_view.get_selected_page():
+            return
         tokens = {}
-        for name in list(self.cards):
+        for name in self.groups.repos(self._selected_group()):  # only the visible group, saves API quota
             host = repo_id.host_of(name)
             if host not in tokens:
                 tokens[host] = self.tokens.get(host)
@@ -294,4 +297,5 @@ class Window(Adw.ApplicationWindow):
 
     def show_prefs(self):
         Prefs(self.settings, self.tokens, self.cards,
-              lambda msg: self.toasts.add_toast(Adw.Toast(title=msg))).present(self)
+              lambda msg: self.toasts.add_toast(Adw.Toast(title=msg)),
+              active=self.groups.repos(self._selected_group())).present(self)
