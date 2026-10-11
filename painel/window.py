@@ -6,6 +6,7 @@ from . import repo_id
 from .card import Card
 from .group_page import GroupPage
 from .groups import Groups
+from .health import group_severity, severity
 from .motion import Slot
 from .prefs import Prefs
 from .sorting import sorted_order
@@ -16,7 +17,7 @@ class Window(Adw.ApplicationWindow):
     def __init__(self, app, settings, service, tokens):
         super().__init__(application=app, title='Painel', default_width=900, default_height=600)
         self.settings, self.service, self.tokens = settings, service, tokens
-        self.cards, self.pages, self.timer = {}, {}, 0
+        self.cards, self.pages, self.timer, self._dot_cache = {}, {}, 0, {}
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
         initial = settings.get_value('groups').unpack()
@@ -40,6 +41,8 @@ class Window(Adw.ApplicationWindow):
         settings.connect('changed::refresh-seconds', lambda *_: self.restart_timer())
         settings.connect('changed::layout', lambda *_: self._apply_layout())
         settings.connect('changed::view', lambda *_: self._apply_view())
+        settings.connect('changed::refresh-all-groups', lambda *_: self._update_marks())
+        Adw.StyleManager.get_default().connect('notify::dark', lambda *_: (self._dot_cache.clear(), self._update_marks()))
         for key in ('sort', 'sort-reverse'):
             settings.connect(f'changed::{key}', lambda *_: self._apply_sort())
 
@@ -128,19 +131,23 @@ class Window(Adw.ApplicationWindow):
         factory = Gtk.SignalListItemFactory()
 
         def setup(_f, item):
-            label = Gtk.Label(xalign=0, margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
+            row = Gtk.Box(spacing=8, margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
+            row.append(Gtk.Image(pixel_size=12))  # health dot, mirrors the tab page icon
+            row.append(Gtk.Label(xalign=0, hexpand=True))
             drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
             drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident))
-            label.add_controller(drop)
-            item.set_child(label)
+            row.add_controller(drop)
+            item.set_child(row)
 
         def bind(_f, item):
-            item.binding = item.get_item().bind_property('title', item.get_child(), 'label',
-                                                          GObject.BindingFlags.SYNC_CREATE)
+            dot, label = item.get_child().get_first_child(), item.get_child().get_last_child()
+            sync = GObject.BindingFlags.SYNC_CREATE
+            item.bindings = [item.get_item().bind_property('title', label, 'label', sync),
+                             item.get_item().bind_property('icon', dot, 'gicon', sync)]
 
         factory.connect('setup', setup)
         factory.connect('bind', bind)
-        factory.connect('unbind', lambda _f, item: item.binding.unbind())
+        factory.connect('unbind', lambda _f, item: [b.unbind() for b in item.bindings])
         lst = Gtk.ListView(model=self.tab_view.get_pages(), factory=factory)
         lst.add_css_class('navigation-sidebar')
         return lst
@@ -164,6 +171,24 @@ class Window(Adw.ApplicationWindow):
             order = [i for i in self.groups.repos(name) if i in self.cards]  # cards are created one by one at startup
             info = {i: (self.cards[i].title.get_label(), self.cards[i].status) for i in order}
             self.pages[name].apply_order(sorted_order(order, mode, reverse, info))
+
+    # --- group health dot on the tab / sidebar row (only meaningful while every group is refreshed) ---
+    _DOT_COLORS = {'error': 'error_color', 'warning': 'warning_color', 'accent': 'blue_3', 'success': 'success_color'}
+
+    def _dot_icon(self, sev):
+        if sev not in self._dot_cache:
+            ok, c = self.get_style_context().lookup_color(self._DOT_COLORS[sev])  # follows the user's theme
+            rgb = '#%02x%02x%02x' % tuple(min(255, max(0, round(v * 255))) for v in (c.red, c.green, c.blue))  # themes can give >1 if ok else '#888888'
+            svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="6" fill="{rgb}"/></svg>'
+            self._dot_cache[sev] = Gio.BytesIcon.new(GLib.Bytes.new(svg.encode()))
+        return self._dot_cache[sev]
+
+    def _update_marks(self):
+        every = self.settings.get_boolean('refresh-all-groups')
+        for name, page in self.pages.items():
+            sev = group_severity([severity(self.cards[i].status) for i in self.groups.repos(name) if i in self.cards]) \
+                if every else 'none'
+            self.tab_view.get_page(page).set_icon(self._dot_icon(sev) if sev != 'none' else None)
 
     # --- groups ---
     def _tab_order(self):
@@ -293,6 +318,7 @@ class Window(Adw.ApplicationWindow):
         self.cards.pop(name)
         self.pages[self.groups.group_of(name)].remove_slot(name)
         self.groups.remove_repo(name)
+        self._update_marks()
 
     # --- moving between groups ---
     def other_groups(self, ident):
@@ -313,6 +339,7 @@ class Window(Adw.ApplicationWindow):
         self.groups.move_repo(ident, group)
         self.pages[group].add_slot(ident, slot)
         self._apply_sort(group)
+        self._update_marks()
         self.toasts.add_toast(Adw.Toast(title=f'Moved to {group}'))
 
     # --- drag routing (a card may have changed group since its callbacks were bound) ---
@@ -356,6 +383,7 @@ class Window(Adw.ApplicationWindow):
         if card:
             card.update(data)
             self._apply_sort(self.groups.group_of(name))
+            self._update_marks()
 
     def show_prefs(self):
         Prefs(self.settings, self.tokens, self.cards,

@@ -97,3 +97,17 @@ class SeverityTest(unittest.TestCase):
 
     def test_anonymous_github_never_claims_approved(self):
         self.assertEqual(self.sev({}, {'draft': 1}, pr_detail=False), 'none')
+
+
+class GroupSeverityTest(unittest.TestCase):
+    def test_worst_card_wins(self):
+        from painel.health import group_severity
+        self.assertEqual(group_severity(['success', 'error', 'accent']), 'error')
+        self.assertEqual(group_severity(['success', 'accent']), 'accent')
+        self.assertEqual(group_severity(['warning', 'accent']), 'warning')
+        self.assertEqual(group_severity(['none', 'success']), 'success')
+
+    def test_empty_or_unknown_is_none(self):
+        from painel.health import group_severity
+        self.assertEqual(group_severity([]), 'none')
+        self.assertEqual(group_severity(['none', 'none']), 'none')
