@@ -20,7 +20,13 @@ class Prefs(Adw.PreferencesDialog):
         layout.set_selected(1 if settings.get_string('layout') == 'sidebar' else 0)
         layout.connect('notify::selected', lambda r, _p: settings.set_string('layout', ('tabs', 'sidebar')[r.get_selected()]))
         group.add(layout)
-        self.interval, self.repos = interval, list(repos if active is None else active)  # repos refreshed each cycle
+        self.interval, self.all_repos, self.active = interval, list(repos), list(repos if active is None else active)
+        every = Adw.SwitchRow(title='Refresh groups out of focus',
+                              subtitle='Also update groups you are not viewing. Uses more API requests.')
+        settings.bind('refresh-all-groups', every, 'active', 0)
+        every.connect('notify::active', lambda *_: self._update_warning())
+        group.add(every)
+        self.every = every
 
         token_group = Adw.PreferencesGroup(title='Access tokens (optional)',
                                       description='For private repos and higher rate limits. Use read-only tokens: '
@@ -50,7 +56,8 @@ class Prefs(Adw.PreferencesDialog):
                 self.on_error(f'Could not save {host} token securely (keyring unavailable)')
 
     def _update_warning(self):
-        github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.repos)
+        refreshed = self.all_repos if self.every.get_active() else self.active  # repos hit each cycle
+        github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in refreshed)
         has_token = bool(self.rows[repo_id.GITHUB_HOST].get_text().strip())
         warning = github_warning(self.interval.get_value(), github, has_token)
         self.interval.set_subtitle(warning or '')

@@ -8,6 +8,7 @@
     <key name="sort-reverse" type="b"><default>false</default><summary>Reverse the sort direction</summary></key>
     <key name="view" type="s"><choices><choice value="grid-small"/><choice value="grid-medium"/><choice value="grid-large"/><choice value="list"/></choices><default>"grid-medium"</default><summary>Card size / view mode</summary></key>
     <key name="titles" type="a{ss}"><default>{}</default><summary>Custom card titles by repository</summary></key>
+    <key name="refresh-all-groups" type="b"><default>false</default><summary>Also refresh groups that are not in focus</summary></key>
     <key name="refresh-seconds" type="i"><range min="15" max="3600"/><default>60</default><summary>Auto refresh interval</summary></key>
   </schema>
 </schemalist>

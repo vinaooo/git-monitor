@@ -35,7 +35,7 @@ class Window(Adw.ApplicationWindow):
         self._apply_sort()
         self._update_actions()
         self.refresh()
-        self.tab_view.connect('notify::selected-page', lambda *_: self.refresh())  # new tab: refresh at once
+        self.tab_view.connect('notify::selected-page', lambda *_: self._on_group_focused())
         self.restart_timer()
         settings.connect('changed::refresh-seconds', lambda *_: self.restart_timer())
         settings.connect('changed::layout', lambda *_: self._apply_layout())
@@ -330,11 +330,18 @@ class Window(Adw.ApplicationWindow):
         self.timer = GLib.timeout_add_seconds(self.settings.get_int('refresh-seconds'),
                                               lambda: self.refresh() or True)
 
+    def _on_group_focused(self):
+        if not self.settings.get_boolean('refresh-all-groups'):  # otherwise it is already fresh
+            self.refresh()  # new tab: refresh at once
+
     def refresh(self):
         if not self.tab_view.get_selected_page():
             return
         tokens = {}
-        for name in self.groups.repos(self._selected_group()):  # only the visible group, saves API quota
+        # default: only the visible group (saves API quota); the preference widens it to every group
+        names = self.groups.all_repos() if self.settings.get_boolean('refresh-all-groups') \
+            else self.groups.repos(self._selected_group())
+        for name in names:
             host = repo_id.host_of(name)
             if host not in tokens:
                 tokens[host] = self.tokens.get(host)
@@ -353,4 +360,4 @@ class Window(Adw.ApplicationWindow):
     def show_prefs(self):
         Prefs(self.settings, self.tokens, self.cards,
               lambda msg: self.toasts.add_toast(Adw.Toast(title=msg)),
-              active=self.groups.repos(self._selected_group())).present(self)
+              active=self.groups.repos(self._selected_group())).present(self)  # for the rate-limit estimate
