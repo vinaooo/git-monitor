@@ -39,21 +39,12 @@ class Window(Adw.ApplicationWindow):
 
     # --- ui construction ---
     def _build_ui(self, app):
-        header = Adw.HeaderBar()
-        add = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='Add repository')
-        add.connect('clicked', self.ask_repo)
-        refresh = Gtk.Button(icon_name='view-refresh-symbolic', tooltip_text='Refresh')
-        refresh.connect('clicked', lambda *_: self.refresh())
-        header.pack_start(add)
-        header.pack_start(refresh)
-
         menu, section = Gio.Menu(), Gio.Menu()
         for label, action in (('New group…', 'new-group'), ('Rename group…', 'rename-group'),
                               ('Delete group…', 'delete-group')):
             section.append(label, f'win.{action}')
         menu.append_section(None, section)
         menu.append_section(None, app.menu)
-        header.pack_end(Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu))
         self.actions = {}
         for name, cb in (('new-group', self.ask_new_group), ('rename-group', self.ask_rename_group),
                          ('delete-group', lambda *_: self.tab_view.close_page(self.tab_view.get_selected_page()))):
@@ -62,7 +53,7 @@ class Window(Adw.ApplicationWindow):
             self.add_action(act)
             self.actions[name] = act
 
-        self.tab_view = Adw.TabView()
+        self.tab_view = Adw.TabView(vexpand=True)
         self.tab_view.connect('close-page', self._on_close_page)
         self.tab_view.connect('page-reordered', lambda *_: self.groups.set_group_order(self._tab_order()))
         self.tab_view.connect('notify::selected-page', lambda *_: self._update_actions())
@@ -73,21 +64,40 @@ class Window(Adw.ApplicationWindow):
         self.tab_bar.setup_extra_drop_target(Gdk.DragAction.MOVE, [GObject.TYPE_STRING])
         self.tab_bar.connect('extra-drag-drop', lambda _bar, page, ident: self._drop_on_page(page, ident))
 
+        # content pane: own header bar (title = current group), like Files
+        self.window_title = Adw.WindowTitle(title='Painel', subtitle='')
+        content_header = Adw.HeaderBar(title_widget=self.window_title, show_start_title_buttons=False)
+        add = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='Add repository')
+        add.connect('clicked', self.ask_repo)
+        refresh = Gtk.Button(icon_name='view-refresh-symbolic', tooltip_text='Refresh')
+        refresh.connect('clicked', lambda *_: self.refresh())
+        content_header.pack_start(add)
+        content_header.pack_start(refresh)
+        self.content_menu = Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu)  # tabs layout only
+        content_header.pack_end(self.content_menu)
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         content.append(self.tab_bar)
-        self.tab_view.set_vexpand(True)
         content.append(self.tab_view)
+        content_view = Adw.ToolbarView(content=content)
+        content_view.add_top_bar(content_header)
+        self.toasts = Adw.ToastOverlay(child=content_view)
+
+        # sidebar pane: runs the full window height, header bar included, like Files
+        sidebar_header = Adw.HeaderBar(title_widget=Adw.WindowTitle(title='Painel', subtitle=''),
+                                       show_end_title_buttons=False)
+        sidebar_header.pack_end(Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu))
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         sidebar.append(Gtk.ScrolledWindow(child=self._build_sidebar(), vexpand=True))
         new_group = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='New group', halign=Gtk.Align.END,
                                margin_top=6, margin_bottom=6, margin_end=6, css_classes=['flat'])
         new_group.connect('clicked', self.ask_new_group)
         sidebar.append(new_group)
-        self.split = Adw.OverlaySplitView(sidebar=sidebar, content=content, show_sidebar=False, max_sidebar_width=240)
-        self.toasts = Adw.ToastOverlay(child=self.split)
-        view = Adw.ToolbarView(content=self.toasts)
-        view.add_top_bar(header)
-        self.set_content(view)
+        sidebar_view = Adw.ToolbarView(content=sidebar)
+        sidebar_view.add_top_bar(sidebar_header)
+
+        self.split = Adw.OverlaySplitView(sidebar=sidebar_view, content=self.toasts, show_sidebar=False,
+                                          max_sidebar_width=260)
+        self.set_content(self.split)
 
     def _build_sidebar(self):
         factory = Gtk.SignalListItemFactory()
@@ -113,6 +123,7 @@ class Window(Adw.ApplicationWindow):
     def _apply_layout(self):
         sidebar = self.settings.get_string('layout') == 'sidebar'
         self.tab_bar.set_visible(not sidebar)
+        self.content_menu.set_visible(not sidebar)  # the sidebar header carries the menu otherwise
         self.split.set_show_sidebar(sidebar)
 
     # --- groups ---
@@ -127,6 +138,7 @@ class Window(Adw.ApplicationWindow):
 
     def _update_actions(self):
         if self.tab_view.get_selected_page():
+            self.window_title.set_title(self._selected_group())
             can = self.groups.can_remove(self._selected_group())
             self.actions['delete-group'].set_enabled(can)
             self.actions['rename-group'].set_enabled(True)
