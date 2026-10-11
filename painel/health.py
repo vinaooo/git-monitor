@@ -36,7 +36,9 @@ def pr_bucket_github(node):
         return 'failing'
     if node.get('mergeable') == 'CONFLICTING':
         return 'conflict'
-    return 'approved' if decision == 'APPROVED' else 'waiting'
+    if decision == 'APPROVED' or (decision is None and rollup.get('state') == 'SUCCESS'):
+        return 'approved'  # no review rule on the repo (decision null) + green checks = nothing left to wait for
+    return 'waiting'
 
 
 _GITLAB = {'mergeable': 'approved', 'requested_changes': 'changes', 'discussions_not_resolved': 'changes',

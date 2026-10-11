@@ -56,7 +56,7 @@ class ChipLinkTest(unittest.TestCase):
     def test_github_filters(self):
         q = lambda s: f'{self.GH}/pulls?q=is%3Apr+is%3Aopen+{s}'
         self.assertEqual(self.link(self.GH, 'draft'), q('draft%3Atrue'))
-        self.assertEqual(self.link(self.GH, 'approved'), q('review%3Aapproved'))
+        self.assertEqual(self.link(self.GH, 'approved'), q('status%3Asuccess+-review%3Arequired'))
         self.assertEqual(self.link(self.GH, 'changes'), q('review%3Achanges_requested'))
         self.assertEqual(self.link(self.GH, 'waiting'), q('review%3Arequired+draft%3Afalse'))
         self.assertEqual(self.link(self.GH, 'failing'), q('status%3Afailure'))
