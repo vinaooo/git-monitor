@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.github.vina.Painel" path="/io/github/vina/Painel/">
+    <key name="repos" type="as"><default>[]</default><summary>Monitored repositories (owner/name)</summary></key>
+    <key name="refresh-seconds" type="i"><range min="15" max="3600"/><default>60</default><summary>Auto refresh interval</summary></key>
+  </schema>
+</schemalist>

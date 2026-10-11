@@ -1,0 +1,5 @@
+#!@PYTHON@
+import sys
+sys.path.insert(0, '@PKGDATADIR@')
+from painel.main import main
+sys.exit(main())

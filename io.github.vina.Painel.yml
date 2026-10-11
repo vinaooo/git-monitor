@@ -1,0 +1,17 @@
+app-id: io.github.vina.Painel
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: painel
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+modules:
+  - name: painel
+    buildsystem: meson
+    sources:
+      - type: dir
+        path: .

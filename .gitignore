@@ -1,0 +1,5 @@
+build/
+_prefix/
+build-flatpak/
+.flatpak-builder/
+__pycache__/
