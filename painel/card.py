@@ -29,14 +29,13 @@ class Card(Gtk.Box):
         self.chips = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)  # one wrapping row per group
         open_btn = Gtk.Button(label='Open in browser', halign=Gtk.Align.START)
         open_btn.connect('clicked', self._open)
-        rm = Gtk.Button(icon_name='user-trash-symbolic', tooltip_text='Remove')
-        rm.add_css_class('flat')
-        rm.connect('clicked', lambda *_: on_remove(full_name))
+        more = Gtk.MenuButton(icon_name='view-more-symbolic', tooltip_text='Card actions', css_classes=['flat'])
+        more.set_create_popup_func(lambda btn: btn.set_menu_model(self._build_menu()))  # groups change: build per opening
         bar = Gtk.Box(spacing=6)
         bar.append(open_btn)
         self.spacer = Gtk.Box(hexpand=True)
         bar.append(self.spacer)
-        bar.append(rm)
+        bar.append(more)
         self.box = box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         for w in (title_row, self.stats, self.chips, bar):
             box.append(w)
@@ -87,19 +86,22 @@ class Card(Gtk.Box):
             return True
         return False
 
-    def _show_menu(self, x, y):
+    def _build_menu(self):
         menu = Gio.Menu()
         menu.append('Rename…', 'card.rename')
         if self.url:
             menu.append('Open in browser', 'card.open')
-        groups = self.other_groups(self.ident)  # they change, so built per opening
+        groups = self.other_groups(self.ident)
         if groups:
             moves = Gio.Menu()
             for group in groups:
                 moves.append(group, Gio.Action.print_detailed_name('card.move', GLib.Variant('s', group)))
             menu.append_submenu('Move to group', moves)
         menu.append('Remove', 'card.remove')
-        popover = Gtk.PopoverMenu.new_from_model(menu)
+        return menu
+
+    def _show_menu(self, x, y):
+        popover = Gtk.PopoverMenu.new_from_model(self._build_menu())
         popover.set_has_arrow(False)
         popover.set_halign(Gtk.Align.START)
         popover.set_parent(self)

@@ -346,7 +346,7 @@ class Window(Adw.ApplicationWindow):
     def _delete_group(self, tab_page):
         name = tab_page.get_child().name
         for repo in self.groups.repos(name):
-            self.remove_repo(repo)
+            self._drop_repo(repo)  # the whole group was confirmed: no per-repo undo
         self.groups.remove(name)
         self.pages.pop(name)
         self.tab_view.close_page_finish(tab_page, True)
@@ -389,6 +389,24 @@ class Window(Adw.ApplicationWindow):
         self._apply_sort(self.groups.group_of(name))
 
     def remove_repo(self, name):
+        group, title = self.groups.group_of(name), self.titles.get(name)
+        self._drop_repo(name)
+        toast = Adw.Toast(title=f'Removed {name.rpartition("/")[2]}', button_label='Undo', timeout=8)
+        toast.connect('button-clicked', lambda *_: self._restore_repo(name, group, title))
+        self.toasts.add_toast(toast)
+
+    def _restore_repo(self, name, group, title):
+        if name in self.cards:
+            return
+        if group not in self.pages:  # its group was deleted meanwhile
+            group = self._selected_group()
+        self.groups.add_repo(group, name)  # appended: the old position is not kept
+        if title:
+            self.titles.set(name, title)
+        self._add_card(name, group)
+        self.refresh()
+
+    def _drop_repo(self, name):
         self.titles.remove(name)
         self.cards.pop(name)
         self.pages[self.groups.group_of(name)].remove_slot(name)
