@@ -15,8 +15,11 @@ from .titles import TitleStore
 
 class Window(Adw.ApplicationWindow):
     def __init__(self, app, settings, service, tokens):
-        super().__init__(application=app, title='Painel', default_width=900, default_height=600)
+        super().__init__(application=app, title='Painel', width_request=360)
         self.settings, self.service, self.tokens = settings, service, tokens
+        for key, prop in (('window-width', 'default-width'), ('window-height', 'default-height'),
+                          ('window-maximized', 'maximized')):
+            settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
         self.cards, self.pages, self.timer = {}, {}, 0
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
@@ -83,6 +86,8 @@ class Window(Adw.ApplicationWindow):
         add = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='Add repository', action_name='win.add-repo')
         refresh = Gtk.Button(icon_name='view-refresh-symbolic', tooltip_text='Refresh')
         refresh.connect('clicked', lambda *_: self.refresh())
+        self.sidebar_toggle = Gtk.ToggleButton(icon_name='sidebar-show-symbolic', tooltip_text='Groups', visible=False)
+        content_header.pack_start(self.sidebar_toggle)
         content_header.pack_start(add)
         content_header.pack_start(refresh)
         self.content_menu = Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu)  # tabs layout only
@@ -113,6 +118,14 @@ class Window(Adw.ApplicationWindow):
         self.split = Adw.OverlaySplitView(sidebar=sidebar_view, content=self.toasts, show_sidebar=False,
                                           max_sidebar_width=260)
         self.set_content(self.split)
+
+        # narrow window: the sidebar becomes an overlay opened by a header toggle
+        breakpoint_ = Adw.Breakpoint.new(Adw.BreakpointCondition.parse('max-width: 600sp'))
+        breakpoint_.add_setter(self.split, 'collapsed', True)
+        self.add_breakpoint(breakpoint_)
+        self.sidebar_toggle.bind_property('active', self.split, 'show-sidebar',
+                                          GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE)
+        self.split.connect('notify::collapsed', lambda *_: self._sync_toggle())
 
     def _build_view_menu(self):
         for key in ('sort', 'sort-reverse', 'view'):  # stateful actions backed by GSettings
@@ -167,7 +180,13 @@ class Window(Adw.ApplicationWindow):
         sidebar = self.settings.get_string('layout') == 'sidebar'
         self.tab_bar.set_visible(not sidebar)
         self.content_menu.set_visible(not sidebar)  # the sidebar header carries the menu otherwise
-        self.split.set_show_sidebar(sidebar)
+        self._sync_toggle()
+
+    def _sync_toggle(self):
+        """Sidebar layout: pinned when wide, closed overlay behind a toggle when collapsed. Tabs layout: none."""
+        sidebar, collapsed = self.settings.get_string('layout') == 'sidebar', self.split.get_collapsed()
+        self.sidebar_toggle.set_visible(sidebar and collapsed)
+        self.split.set_show_sidebar(sidebar and not collapsed)
 
     # --- view and sort (live: re-sorted whenever a refresh brings new numbers) ---
     def _apply_view(self):
@@ -232,6 +251,8 @@ class Window(Adw.ApplicationWindow):
 
     def _update_actions(self):
         if self.tab_view.get_selected_page():
+            if self.split.get_collapsed():
+                self.split.set_show_sidebar(False)  # picked a group from the overlay: get out of the way
             self.window_title.set_title(self._selected_group())
             can = self.groups.can_remove(self._selected_group())
             self.actions['delete-group'].set_enabled(can)
