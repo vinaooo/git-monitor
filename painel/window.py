@@ -193,9 +193,12 @@ class Window(Adw.ApplicationWindow):
     def _update_marks(self):
         every = self.settings.get_boolean('refresh-all-groups')
         for name, page in self.pages.items():
-            sev = group_severity([severity(self.cards[i].status) for i in self.groups.repos(name) if i in self.cards]) \
-                if every else 'none'
-            self.tab_view.get_page(page).set_keyword(sev)  # carries the severity: sidebar rows follow its notify
+            cards = [self.cards[i] for i in self.groups.repos(name) if i in self.cards]
+            sev = group_severity([severity(c.status) for c in cards]) if every else 'none'
+            ready = sum((c.status.pr_counts or {}).get('approved', 0) for c in cards if c.status) if every else 0
+            tab = self.tab_view.get_page(page)
+            tab.set_keyword(sev)  # carries the severity: sidebar rows follow its notify
+            tab.set_title(f'{name}  ● {ready}' if ready else name)  # ● N = approved PRs/MRs ready to merge
         self._tint_tabs()
 
     def _tint_tabs(self):
@@ -273,6 +276,7 @@ class Window(Adw.ApplicationWindow):
         page.name = new
         self.pages[new] = page
         self.tab_view.get_page(page).set_title(new)
+        self._update_marks()
 
     def _on_close_page(self, tab_view, tab_page):
         name = tab_page.get_child().name
