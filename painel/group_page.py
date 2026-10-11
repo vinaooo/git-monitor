@@ -34,7 +34,9 @@ class GroupPage(Gtk.Stack):
 
     def remove_slot(self, ident):
         slot = self.slots.pop(ident)
-        self.flow.remove(slot.get_parent())  # FlowBoxChild
+        wrapper = slot.get_parent()  # FlowBoxChild
+        wrapper.set_child(None)  # free the slot first, else re-adding it elsewhere trips a GTK assertion
+        self.flow.remove(wrapper)
         self._sync()
         return slot
 
