@@ -1,4 +1,4 @@
-from gi.repository import Adw, Gdk, GObject, Gtk
+from gi.repository import Adw, Gdk, Gtk
 
 CI = {'success': ('Passing', 'success'), 'failure': ('Failing', 'error'),
       'running': ('Running', 'accent'), 'cancelled': ('Cancelled', 'warning'),
@@ -6,12 +6,12 @@ CI = {'success': ('Passing', 'success'), 'failure': ('Failing', 'error'),
 
 
 class Card(Gtk.Box):
-    def __init__(self, full_name, on_remove, on_rename, on_reorder, custom_title=None):
+    def __init__(self, full_name, on_remove, on_rename, on_drag_begin, on_drag_end, custom_title=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.add_css_class('card')
         for s in ('top', 'bottom', 'start', 'end'):
             getattr(self, f'set_margin_{s}')(6)
-        self.url, self.fetched_name, self.custom_title = None, full_name, custom_title
+        self.ident, self.url, self.fetched_name, self.custom_title = full_name, None, full_name, custom_title
         self.on_rename = lambda text: on_rename(full_name, text)
         self.title = Gtk.Label(label=custom_title or full_name, xalign=0, wrap=True, hexpand=True)
         self.title.add_css_class('title-3')
@@ -37,18 +37,24 @@ class Card(Gtk.Box):
         for s in ('top', 'bottom', 'start', 'end'):
             getattr(box, f'set_margin_{s}')(12)
         self.append(box)
-        self._setup_drag_and_drop(full_name, on_reorder)
+        self._setup_drag_and_drop(full_name, on_drag_begin, on_drag_end)
 
-    def _setup_drag_and_drop(self, ident, on_reorder):
+    def _setup_drag_and_drop(self, ident, on_drag_begin, on_drag_end):
         source = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
         source.connect('prepare', lambda *_: Gdk.ContentProvider.new_for_value(ident))
-        source.connect('drag-begin', lambda src, _drag: src.set_icon(Gtk.WidgetPaintable.new(self), 0, 0))
+        source.connect('drag-begin', lambda src, _drag: self._on_drag_begin(src, ident, on_drag_begin))
+        source.connect('drag-end', lambda *_: self._on_drag_end(ident, on_drag_end))
         self.add_controller(source)
-        target = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
-        target.connect('enter', lambda *_: self.set_opacity(0.6) or Gdk.DragAction.MOVE)
-        target.connect('leave', lambda *_: self.set_opacity(1))
-        target.connect('drop', lambda _t, src, *_: self.set_opacity(1) or on_reorder(src, ident) or True)
-        self.add_controller(target)
+
+    def _on_drag_begin(self, source, ident, callback):
+        # static snapshot as drag icon, then blank the card: the empty slot is the live drop preview
+        source.set_icon(Gtk.WidgetPaintable.new(self).get_current_image(), 0, 0)
+        self.set_opacity(0)
+        callback(ident)
+
+    def _on_drag_end(self, ident, callback):
+        self.set_opacity(1)
+        callback(ident)
 
     def _build_title_row(self):
         self.pencil = Gtk.Button(icon_name='document-edit-symbolic', tooltip_text='Rename card',
