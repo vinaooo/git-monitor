@@ -6,7 +6,7 @@ Painel: GNOME/GTK4 + libadwaita app (Python/PyGObject, meson, Flatpak) showing o
 
 ## Commands
 
-- Self-check (the only test; asserts for `parse`/`migrate`): `python3 -I src/providers.py`
+- Tests (stdlib `unittest`, no deps; write the failing test first): `python3 -m unittest discover -s tests -t .`; single: `python3 -m unittest tests.test_gitlab.GitLabTest.test_counts_and_name`
 - Run from source (no tree-run support, must install to a prefix):
   ```
   meson setup build --prefix=$PWD/_prefix && meson install -C build
@@ -18,12 +18,15 @@ Painel: GNOME/GTK4 + libadwaita app (Python/PyGObject, meson, Flatpak) showing o
 
 ## Architecture
 
-- `src/providers.py` — all network/parsing/secret logic, no GTK. A repo is identified everywhere by an identity string `host/path` (`github.com/o/r`, `gitlab.com/g/sub/p`). `parse()` turns user input into it (bare `o/r` means GitHub; GitLab only for `gitlab.com` / `gitlab.*` hosts), `migrate()` upgrades legacy bare `o/r` entries, `fetch()` dispatches on host to `_github` / `_gitlab` and returns one normalized dict (`name,url,issues,prs,ci` or `name,error`). CI vocabulary is shared: `success|failure|running|cancelled|none`; GitLab statuses are mapped in `_GL_CI`.
-- API quirks that look wrong but are deliberate: GitHub `open_issues_count` includes PRs, so issues = count − PRs (PR count from the search API). GitLab project payload omits `open_issues_count` when anonymous, so issues come from `/issues_statistics`; MR count comes from the `X-Total` header.
-- `src/window.py` — `Window` owns the FlowBox of `Card`s (`self.cards` keyed by identity), a refresh timer (`GLib.timeout_add_seconds`, restarted when `refresh-seconds` changes), and one daemon thread per repo per refresh; results return to the UI thread via `GLib.idle_add`. Cards removed mid-fetch are ignored in `_apply`.
-- `src/prefs.py` — `Adw.PreferencesDialog`: interval + one token row per host (github.com, gitlab.com, plus any host among stored repos); tokens saved on dialog close.
-- Storage: repo list and interval in GSettings (`data/io.github.vina.Painel.gschema.xml`, keys `repos`, `refresh-seconds`); tokens only in libsecret, keyed by `host` attribute (legacy `purpose=github-token` lookup kept as fallback for `github.com`). Never put tokens in GSettings/files.
-- Packaging: `src/painel.in` is the launcher template; Python modules install to `<prefix>/share/painel/painel/` (not site-packages), so adding a module requires listing it in `src/meson.build`. `data/` holds desktop/metainfo/schema/icons.
+Package `painel/` (installed to `<prefix>/share/painel/painel/`; new modules must be added to `painel/meson.build`). Launcher template: `src/painel.in`. Dependencies point inward: UI -> `service` -> providers -> `HttpClient` port; only `tokens.py` and the UI import GTK/libsecret, so everything else is unit-testable with `tests/fakes.py:FakeHttp`.
+
+- `repo_id.py` — repo identity string `host/path` (`github.com/o/r`, `gitlab.com/g/sub/p`): `parse` (bare `o/r` = GitHub; GitLab only for `gitlab.com` / `gitlab.*`), `migrate` (legacy bare `o/r` entries), `host_of`.
+- `status.py` — `RepoStatus` frozen dataclass; the only shape UI consumes. CI vocabulary: `success|failure|running|cancelled|none`.
+- `http.py` — `HttpClient` port, `UrllibClient`, `HttpError(code)`, `NetworkError`.
+- `github.py` / `gitlab.py` — `fetch(path, token) -> RepoStatus`, raise on failure. Deliberate quirks: GitHub `open_issues_count` includes PRs (issues = count - PRs, PR count from search API); GitLab project payload omits the issue count when anonymous (use `/issues_statistics`), MR count is the `X-Total` header, GitLab statuses mapped in `_CI`.
+- `service.py` — `StatusService`: host -> provider, converts every failure into `RepoStatus(error=...)`. Add a provider = new module + branch in `_provider` + tests.
+- `tokens.py` — `TokenStore` (libsecret, keyed by `host`; legacy `purpose=github-token` fallback). Never store tokens in GSettings/files.
+- `window.py` / `card.py` / `prefs.py` / `main.py` — UI. `App` builds `StatusService` and `TokenStore` and injects them into `Window`. One daemon thread per repo per refresh, results return via `GLib.idle_add`; cards removed mid-fetch are ignored. GSettings keys: `repos`, `refresh-seconds`.
 
 ## Open items before Flathub submission
 

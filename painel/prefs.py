@@ -1,10 +1,10 @@
 from gi.repository import Adw
 
-from . import providers
+from . import repo_id
 
 
 class Prefs(Adw.PreferencesDialog):
-    def __init__(self, settings, repos):
+    def __init__(self, settings, tokens, repos):
         super().__init__(title='Preferences')
         page, group = Adw.PreferencesPage(), Adw.PreferencesGroup(title='Refresh')
         page.add(group)
@@ -18,11 +18,11 @@ class Prefs(Adw.PreferencesDialog):
         tokens = Adw.PreferencesGroup(title='Access tokens (optional)',
                                       description='For private repos and higher rate limits')
         page.add(tokens)
-        self.rows = {}
-        for host in dict.fromkeys(['github.com', 'gitlab.com', *map(providers.host_of, repos)]):
+        self.tokens, self.rows = tokens, {}
+        for host in dict.fromkeys(['github.com', 'gitlab.com', *map(repo_id.host_of, repos)]):
             row = Adw.PasswordEntryRow(title=host)
-            row.set_text(providers.get_token(host) or '')
+            row.set_text(tokens.get(host) or '')
             tokens.add(row)
             self.rows[host] = row
-        self.connect('closed', lambda *_: [providers.set_token(h, r.get_text().strip())
+        self.connect('closed', lambda *_: [self.tokens.set(h, r.get_text().strip())
                                            for h, r in self.rows.items()])
