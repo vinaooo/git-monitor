@@ -79,6 +79,13 @@ class Card(Gtk.Box):
         self.hovered = hovered
         self._sync_pencil()
 
+    def _leave_edit(self):
+        self.title_stack.set_visible_child_name('view')
+        root = self.get_root()
+        if root:
+            root.set_focus(None)  # else GTK parks focus on the pencil and keeps it shown
+        self._sync_pencil()
+
     def _sync_pencil(self):
         # has_visible_focus: keyboard focus only, a mouse click must not pin the pencil
         self.pencil.set_opacity(1 if self.hovered or self.pencil.has_visible_focus() else 0)
@@ -93,16 +100,14 @@ class Card(Gtk.Box):
 
     def _on_entry_key(self, _ctl, keyval, *_):
         if keyval == Gdk.KEY_Escape:
-            self.title_stack.set_visible_child_name('view')
-            self._sync_pencil()
+            self._leave_edit()
             return True
         return False
 
     def set_custom_title(self, title):
         self.custom_title = title
         self.title.set_label(title or self.fetched_name)
-        self.title_stack.set_visible_child_name('view')
-        self._sync_pencil()
+        self._leave_edit()
 
     def _open(self, *_):
         if self.url:
