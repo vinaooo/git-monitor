@@ -30,4 +30,4 @@ Package `painel/` (installed to `<prefix>/share/painel/painel/`; new modules mus
 
 ## Open items before Flathub submission
 
-App ID `io.github.vina.Painel` is a placeholder (must match a real repo/domain), plus missing screenshots, license file, and metainfo `<developer>` tag.
+App ID `io.github.vina.Painel` is a placeholder (must match a real repo/domain), plus missing screenshots and metainfo `<developer>` tag.

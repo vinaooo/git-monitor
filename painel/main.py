@@ -3,7 +3,7 @@ import sys
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Adw, Gio
+from gi.repository import Adw, Gio, Gtk
 
 from .http import UrllibClient
 from .service import StatusService
@@ -33,7 +33,7 @@ class App(Adw.Application):
     def about(self, *_):
         Adw.AboutDialog(application_name='Painel', application_icon=APP_ID, version='0.1.0',
                         comments='Monitor GitHub repositories',
-                        license_type=3).present(self.props.active_window)  # 3 = GPL_3_0
+                        license_type=Gtk.License.MIT_X11).present(self.props.active_window)
 
 
 def main():
