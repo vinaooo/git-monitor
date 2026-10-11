@@ -1,9 +1,10 @@
 import threading
 
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, Gdk, GLib, GObject, Gtk
 
 from . import repo_id
 from .card import Card
+from .ordering import move
 from .prefs import Prefs
 from .titles import TitleStore
 
@@ -11,7 +12,7 @@ class Window(Adw.ApplicationWindow):
     def __init__(self, app, settings, service, tokens):
         super().__init__(application=app, title='Painel', default_width=800, default_height=600)
         self.settings, self.service, self.tokens = settings, service, tokens
-        self.cards = {}
+        self.cards, self.dragging = {}, None
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
         self.timer = 0
@@ -44,6 +45,10 @@ class Window(Adw.ApplicationWindow):
         settings.set_strv('repos', repos)
         for r in repos:
             self._add_card(r)
+        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        drop.connect('motion', lambda _t, x, y: self.drag_over(x, y) or Gdk.DragAction.MOVE)
+        drop.connect('drop', lambda *_: self.drag_dropped() or True)
+        self.flow.add_controller(drop)
         self._sync_stack()
         self.refresh()
         self.restart_timer()
@@ -59,7 +64,7 @@ class Window(Adw.ApplicationWindow):
         self.stack.set_visible_child_name('list' if self.cards else 'empty')
 
     def _add_card(self, name):
-        card = Card(name, self.remove_repo, self.rename_repo, self.titles.get(name))
+        card = Card(name, self.remove_repo, self.rename_repo, self.drag_started, self.drag_finished, self.titles.get(name))
         self.cards[name] = card
         self.flow.append(card)
 
@@ -86,6 +91,44 @@ class Window(Adw.ApplicationWindow):
         self._add_card(name)
         self._sync_stack()
         self.refresh()
+
+    # --- drag and drop: cards shift live while dragging; the dragged card stays put (blank slot) ---
+    def _flow_order(self):
+        order, child = [], self.flow.get_first_child()
+        while child:
+            order.append(child.get_child().ident)
+            child = child.get_next_sibling()
+        return order
+
+    def _show_order(self, order, anchor):
+        """Re-sequence the flow without reparenting `anchor` (moving the drag source would abort the drag)."""
+        children = {i: self.cards[i].get_parent() for i in order}
+        for i in order:
+            if i != anchor:
+                self.flow.remove(children[i])
+        pos = order.index(anchor)
+        for n, i in enumerate(order):
+            if i == anchor:
+                continue
+            self.flow.insert(children[i], n) if n < pos else self.flow.append(children[i])
+
+    def drag_started(self, ident):
+        self.dragging = ident
+
+    def drag_over(self, x, y):
+        child = self.flow.get_child_at_pos(x, y)
+        if self.dragging and child and child.get_child().ident != self.dragging:
+            order = move(self._flow_order(), self.dragging, child.get_child().ident)
+            self._show_order(order, self.dragging)
+
+    def drag_dropped(self):
+        self.settings.set_strv('repos', self._flow_order())
+
+    def drag_finished(self, _ident):
+        self.dragging = None
+        saved = self.settings.get_strv('repos')
+        if self._flow_order() != saved:  # drag cancelled: undo the preview
+            self._show_order(saved, saved[0])
 
     def rename_repo(self, name, title):
         self.titles.set(name, title)
