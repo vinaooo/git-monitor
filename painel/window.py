@@ -71,6 +71,12 @@ class Window(Adw.ApplicationWindow):
                                                             GLib.idle_add(self._tint_tabs)))
         self.tab_view.connect('page-attached', lambda *_: GLib.idle_add(self._tint_tabs))  # tab widgets appear after this
         self.tab_view.connect('notify::selected-page', lambda *_: self._update_actions())
+        group_menu = Gio.Menu()
+        group_menu.append('Rename…', 'win.rename-group')
+        group_menu.append('Delete…', 'win.delete-group')
+        self.group_menu = group_menu
+        self.tab_view.set_menu_model(group_menu)
+        self.tab_view.connect('setup-menu', lambda _v, page: page and self.tab_view.set_selected_page(page))
         self.tab_bar = Adw.TabBar(view=self.tab_view, autohide=False)
         new_tab = Gtk.Button(icon_name='tab-new-symbolic', tooltip_text='New group', css_classes=['flat'])
         new_tab.connect('clicked', self.ask_new_group)
@@ -156,6 +162,9 @@ class Window(Adw.ApplicationWindow):
             drop = Gtk.DropTarget.new(GObject.TYPE_VARIANT, Gdk.DragAction.MOVE)
             drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident.unpack()))
             row.add_controller(drop)
+            for gesture in (Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY), Gtk.GestureLongPress()):
+                gesture.connect('pressed', lambda _g, *a: self._group_row_menu(item.get_item(), row, *a[-2:]))
+                row.add_controller(gesture)
             item.set_child(row)
 
         def bind(_f, item):
@@ -178,6 +187,16 @@ class Window(Adw.ApplicationWindow):
         lst = Gtk.ListView(model=self.tab_view.get_pages(), factory=factory)
         lst.add_css_class('navigation-sidebar')
         return lst
+
+    def _group_row_menu(self, page, row, x, y):
+        self.tab_view.set_selected_page(page)  # the group actions act on the selected group
+        popover = Gtk.PopoverMenu.new_from_model(self.group_menu)
+        popover.set_has_arrow(False)
+        popover.set_halign(Gtk.Align.START)
+        popover.set_parent(row)
+        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        popover.connect('closed', lambda p: GLib.idle_add(p.unparent))
+        popover.popup()
 
     def _apply_layout(self):
         sidebar = self.settings.get_string('layout') == 'sidebar'

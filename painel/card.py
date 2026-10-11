@@ -1,4 +1,4 @@
-from gi.repository import Adw, Gdk, GLib, Gtk, Pango
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from .chips import Chip, chips_for
 from .health import severity
@@ -46,7 +46,7 @@ class Card(Gtk.Box):
         self.append(box)
         self._set_chips(LOADING_CHIPS)  # same rows as loaded: the card keeps its size when data arrives
         self._setup_drag_and_drop(full_name, on_drag_begin, on_drag_end)
-        self._setup_group_menu(other_groups, on_move)
+        self._setup_group_menu(other_groups, on_move, on_remove)
 
     def set_compact(self, compact):
         """List view: everything on one row instead of stacked."""
@@ -63,25 +63,48 @@ class Card(Gtk.Box):
         source.connect('drag-end', lambda *_: self._on_drag_end(ident, on_drag_end))
         self.add_controller(source)
 
-    def _setup_group_menu(self, other_groups, on_move):
-        click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
-        click.connect('pressed', lambda _g, _n, x, y: self._show_group_menu(other_groups(self.ident), on_move, x, y))
-        self.add_controller(click)
+    def _setup_group_menu(self, other_groups, on_move, on_remove):
+        """One context menu (right-click, long-press, Menu key / Shift+F10): rename, open, move, remove."""
+        self.other_groups = other_groups
+        actions = Gio.SimpleActionGroup()
+        for name, cb, param in (('rename', lambda *_: self._start_edit(), None), ('open', self._open, None),
+                                ('remove', lambda *_: on_remove(self.ident), None),
+                                ('move', lambda _a, g: on_move(self.ident, g.get_string()), GLib.VariantType('s'))):
+            act = Gio.SimpleAction.new(name, param)
+            act.connect('activate', cb)
+            actions.add_action(act)
+        self.insert_action_group('card', actions)
+        for gesture in (Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY), Gtk.GestureLongPress()):
+            gesture.connect('pressed', lambda _g, *a: self._show_menu(*a[-2:]))
+            self.add_controller(gesture)
+        keys = Gtk.EventControllerKey()
+        keys.connect('key-pressed', self._on_menu_key)
+        self.add_controller(keys)
 
-    def _show_group_menu(self, groups, on_move, x, y):
-        if not groups:
-            return
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.append(Gtk.Label(label='Move to group', xalign=0, margin_start=6, margin_bottom=4, css_classes=['dim-label']))
-        popover = Gtk.Popover(child=box, has_arrow=False, halign=Gtk.Align.START)
+    def _on_menu_key(self, _ctl, keyval, _code, state):
+        if keyval == Gdk.KEY_Menu or (keyval == Gdk.KEY_F10 and state & Gdk.ModifierType.SHIFT_MASK):
+            self._show_menu(self.get_width() / 2, self.get_height() / 2)
+            return True
+        return False
+
+    def _show_menu(self, x, y):
+        menu = Gio.Menu()
+        menu.append('Rename…', 'card.rename')
+        if self.url:
+            menu.append('Open in browser', 'card.open')
+        groups = self.other_groups(self.ident)  # they change, so built per opening
+        if groups:
+            moves = Gio.Menu()
+            for group in groups:
+                moves.append(group, Gio.Action.print_detailed_name('card.move', GLib.Variant('s', group)))
+            menu.append_submenu('Move to group', moves)
+        menu.append('Remove', 'card.remove')
+        popover = Gtk.PopoverMenu.new_from_model(menu)
+        popover.set_has_arrow(False)
+        popover.set_halign(Gtk.Align.START)
         popover.set_parent(self)
         popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
-        popover.connect('closed', lambda p: p.unparent())
-        for group in groups:
-            btn = Gtk.Button(label=group, halign=Gtk.Align.FILL, css_classes=['flat'])
-            btn.get_child().set_xalign(0)
-            btn.connect('clicked', lambda _b, g=group: (popover.popdown(), on_move(self.ident, g)))
-            box.append(btn)
+        popover.connect('closed', lambda p: GLib.idle_add(p.unparent))  # after the chosen action ran
         popover.popup()
 
     def _on_prepare(self, ident, x, y):
