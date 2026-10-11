@@ -20,7 +20,7 @@ class Window(Adw.ApplicationWindow):
         for key, prop in (('window-width', 'default-width'), ('window-height', 'default-height'),
                           ('window-maximized', 'maximized')):
             settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
-        self.cards, self.pages, self.timer = {}, {}, 0
+        self.cards, self.pages, self.timer, self.pending = {}, {}, 0, 0  # pending: fetches in flight
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
         initial = settings.get_value('groups').unpack()
@@ -94,7 +94,8 @@ class Window(Adw.ApplicationWindow):
         act = Gio.SimpleAction.new('refresh', None)
         act.connect('activate', lambda *_: self.refresh())
         self.add_action(act)
-        refresh = Gtk.Button(icon_name='view-refresh-symbolic', tooltip_text='Refresh', action_name='win.refresh')
+        self.refresh_button = refresh = Gtk.Button(icon_name='view-refresh-symbolic', tooltip_text='Refresh',
+                                                   action_name='win.refresh')
         self.sidebar_toggle = Gtk.ToggleButton(icon_name='sidebar-show-symbolic', tooltip_text='Groups', visible=False)
         content_header.pack_start(self.sidebar_toggle)
         content_header.pack_start(add)
@@ -474,13 +475,20 @@ class Window(Adw.ApplicationWindow):
             host = repo_id.host_of(name)
             if host not in tokens:
                 tokens[host] = self.tokens.get(host)
+            self.pending += 1
             threading.Thread(target=self._worker, args=(name, tokens[host]), daemon=True).start()
+        if self.pending:
+            self.refresh_button.set_child(Adw.Spinner())
 
     def _worker(self, name, token):
         data = self.service.fetch(name, token)
         GLib.idle_add(self._apply, name, data)
 
     def _apply(self, name, data):
+        self.pending -= 1
+        if not self.pending:  # last result in: stop the spinner, stamp the time
+            self.refresh_button.set_icon_name('view-refresh-symbolic')
+            self.window_title.set_subtitle(f'Updated {GLib.DateTime.new_now_local().format("%H:%M")}')
         card = self.cards.get(name)  # may have been removed meanwhile
         if card:
             card.update(data)

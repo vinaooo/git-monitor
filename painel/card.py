@@ -201,15 +201,26 @@ class Card(Gtk.Box):
             self._launch(self.url)
 
     def update(self, s):
+        # a failed refresh keeps the last good data on screen (dimmed) instead of wiping it
+        stale = bool(s.error and self.status and not self.status.error)
+        for css in HEALTH_CLASSES:
+            self.remove_css_class(css)
+        self.stats.remove_css_class('error')
+        self.chips.set_opacity(0.5 if stale else 1)
+        if stale:
+            self.stats.set_label(f'Couldn’t refresh · {s.error}')
+            self.stats.add_css_class('error')
+            self.add_css_class('health-error')
+            return
         self.status = s
         self.fetched_name = s.name
         self.entry.set_placeholder_text(s.name)
         self.title.set_label(self.custom_title or s.name)
-        for css in HEALTH_CLASSES:
-            self.remove_css_class(css)
         self._set_chips(chips_for(s))
         if s.error:
             self.stats.set_label(s.error)
+            self.stats.add_css_class('error')
+            self.add_css_class('health-error')
             return
         self.url = s.url
         self.stats.set_label(f'{s.issues} open issue{"" if s.issues == 1 else "s"}')
