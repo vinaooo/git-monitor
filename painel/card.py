@@ -1,4 +1,4 @@
-from gi.repository import Adw, Gdk, Gtk, Pango
+from gi.repository import Adw, Gdk, GLib, Gtk, Pango
 
 from .chips import Chip, chips_for
 from .health import severity
@@ -88,7 +88,7 @@ class Card(Gtk.Box):
         if not self.can_drag():  # a sort mode owns the order: no drag at all
             return None
         self.grab_point = (int(x), int(y))  # where inside the card the press happened
-        return Gdk.ContentProvider.new_for_value(ident)
+        return Gdk.ContentProvider.new_for_value(GLib.Variant('s', ident))  # not text: a terminal would accept (and ptyxis crash on) a string drop
 
     def _on_drag_begin(self, source, ident, callback):
         # static snapshot as drag icon, then blank the card: the empty slot is the live drop preview

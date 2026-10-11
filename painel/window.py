@@ -71,8 +71,8 @@ class Window(Adw.ApplicationWindow):
         new_tab = Gtk.Button(icon_name='tab-new-symbolic', tooltip_text='New group', css_classes=['flat'])
         new_tab.connect('clicked', self.ask_new_group)
         self.tab_bar.set_end_action_widget(new_tab)
-        self.tab_bar.setup_extra_drop_target(Gdk.DragAction.MOVE, [GObject.TYPE_STRING])
-        self.tab_bar.connect('extra-drag-drop', lambda _bar, page, ident: self._drop_on_page(page, ident))
+        self.tab_bar.setup_extra_drop_target(Gdk.DragAction.MOVE, [GObject.TYPE_VARIANT])
+        self.tab_bar.connect('extra-drag-drop', lambda _bar, page, ident: self._drop_on_page(page, ident.unpack()))
 
         # content pane: own header bar (title = current group), like Files
         self.window_title = Adw.WindowTitle(title='Painel', subtitle='')
@@ -134,8 +134,8 @@ class Window(Adw.ApplicationWindow):
         def setup(_f, item):
             row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
             row.append(Gtk.Label(xalign=0, hexpand=True))
-            drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
-            drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident))
+            drop = Gtk.DropTarget.new(GObject.TYPE_VARIANT, Gdk.DragAction.MOVE)
+            drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident.unpack()))
             row.add_controller(drop)
             item.set_child(row)
 
