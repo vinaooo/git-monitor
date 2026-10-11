@@ -1,8 +1,9 @@
 from gi.repository import Adw, Gdk, Gtk
 
-CI = {'success': ('Passing', 'success'), 'failure': ('Failing', 'error'),
-      'running': ('Running', 'accent'), 'cancelled': ('Cancelled', 'warning'),
-      'none': ('No CI', 'dim-label')}
+from .chips import chips_for
+from .health import severity
+
+HEALTH_CLASSES = ('health-error', 'health-warning', 'health-accent', 'health-success')
 
 
 class Card(Gtk.Box):
@@ -19,11 +20,7 @@ class Card(Gtk.Box):
         self.title.add_css_class('title-3')
         title_row = self._build_title_row()
         self.stats = Gtk.Label(label='Loading…', xalign=0)
-        self.ci = Gtk.Label(xalign=0)
-        self.spinner = Adw.Spinner(visible=False)
-        ci_row = Gtk.Box(spacing=6)
-        ci_row.append(self.spinner)
-        ci_row.append(self.ci)
+        self.chips = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)  # one wrapping row per group
         open_btn = Gtk.Button(label='Open in browser', halign=Gtk.Align.START)
         open_btn.connect('clicked', self._open)
         rm = Gtk.Button(icon_name='user-trash-symbolic', tooltip_text='Remove')
@@ -35,9 +32,9 @@ class Card(Gtk.Box):
         bar.append(self.spacer)
         bar.append(rm)
         self.box = box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        for w in (title_row, self.stats, ci_row, bar):
+        for w in (title_row, self.stats, self.chips, bar):
             box.append(w)
-        self.parts = (title_row, self.stats, ci_row, bar)
+        self.parts = (title_row, self.stats, self.chips, bar)
         for s in ('top', 'bottom', 'start', 'end'):
             getattr(box, f'set_margin_{s}')(12)
         self.append(box)
@@ -170,16 +167,28 @@ class Card(Gtk.Box):
         self.fetched_name = s.name
         self.entry.set_placeholder_text(s.name)
         self.title.set_label(self.custom_title or s.name)
-        for c in ('success', 'error', 'accent', 'warning', 'dim-label'):
-            self.ci.remove_css_class(c)
+        for css in HEALTH_CLASSES:
+            self.remove_css_class(css)
+        self._set_chips(chips_for(s))
         if s.error:
             self.stats.set_label(s.error)
-            self.ci.set_label('')
-            self.spinner.set_visible(False)
             return
         self.url = s.url
-        label, css = CI.get(s.ci, CI['none'])
-        self.stats.set_label(f"{s.issues} open issues · {s.prs} pending PRs")
-        self.ci.set_label(f'CI: {label}')
-        self.ci.add_css_class(css)
-        self.spinner.set_visible(s.ci == 'running')
+        self.stats.set_label(f'{s.issues} open issues')
+        if severity(s) != 'none':
+            self.add_css_class(f'health-{severity(s)}')
+
+    def _set_chips(self, groups):
+        while child := self.chips.get_first_child():
+            self.chips.remove(child)
+        for name, chips in groups:
+            # FlowBox, not Adw.WrapBox: WrapBox's natural_line_length trips GTK's min<=natural check;
+            # capping children per line keeps the card narrow so the grid still gets columns
+            flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=False, min_children_per_line=1,
+                               max_children_per_line=2, column_spacing=6, row_spacing=4, halign=Gtk.Align.START)
+            for chip in chips:
+                flow.append(Gtk.Label(label=chip.text, css_classes=['chip', chip.css], tooltip_text=chip.tooltip or None))
+            row = Gtk.Box(spacing=8, valign=Gtk.Align.START)
+            row.append(Gtk.Label(label=name, css_classes=['dim-label', 'caption'], width_chars=3, xalign=0, yalign=0.5))
+            row.append(flow)
+            self.chips.append(row)

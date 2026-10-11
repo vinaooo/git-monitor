@@ -113,7 +113,7 @@ class Window(Adw.ApplicationWindow):
         menu = Gio.Menu()
         sort = Gio.Menu()
         for label, mode in (('Manual order', 'manual'), ('Name', 'name'), ('Open issues', 'issues'),
-                            ('Pending PRs/MRs', 'prs'), ('CI status', 'ci')):
+                            ('Pending PRs/MRs', 'prs'), ('Health (worst first)', 'ci')):
             sort.append(label, f'win.sort::{mode}')
         sort.append('Reverse order', 'win.sort-reverse')
         menu.append_section('Sort by', sort)

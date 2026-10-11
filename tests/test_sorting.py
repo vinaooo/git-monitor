@@ -5,7 +5,8 @@ from painel.status import RepoStatus
 
 
 def st(issues=0, prs=0, ci='none', error=None):
-    return RepoStatus(name='x', issues=issues, prs=prs, ci=ci, error=error)
+    return RepoStatus(name='x', issues=issues, prs=prs, ci=ci, error=error,
+                      ci_counts={ci: 1} if ci != 'none' else {})
 
 
 INFO = {'a': ('beta', st(issues=5, prs=1, ci='success')),
