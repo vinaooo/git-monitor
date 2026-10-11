@@ -1,11 +1,12 @@
 from gi.repository import Adw
 
 from . import repo_id
+from .tokens import TokenStoreError
 from .rate_limit import github_warning
 
 
 class Prefs(Adw.PreferencesDialog):
-    def __init__(self, settings, tokens, repos):
+    def __init__(self, settings, tokens, repos, on_error):
         super().__init__(title='Preferences')
         page, group = Adw.PreferencesPage(), Adw.PreferencesGroup(title='Refresh')
         page.add(group)
@@ -18,19 +19,31 @@ class Prefs(Adw.PreferencesDialog):
         self.interval, self.repos = interval, repos
 
         token_group = Adw.PreferencesGroup(title='Access tokens (optional)',
-                                      description='For private repos and higher rate limits')
+                                      description='For private repos and higher rate limits. Use read-only tokens: '
+                                                  'GitHub fine-grained (Metadata, Issues, Pull requests, '
+                                                  'Actions: read) or GitLab read_api, with an expiry date.')
         page.add(token_group)
-        self.tokens, self.rows = tokens, {}
+        self.tokens, self.on_error, self.rows, self.initial = tokens, on_error, {}, {}
         for host in dict.fromkeys(['github.com', 'gitlab.com', *map(repo_id.host_of, repos)]):
             row = Adw.PasswordEntryRow(title=host)
-            row.set_text(tokens.get(host) or '')
+            self.initial[host] = tokens.get(host) or ''
+            row.set_text(self.initial[host])
             token_group.add(row)
             self.rows[host] = row
         interval.connect('notify::value', lambda *_: self._update_warning())
         self.rows['github.com'].connect('changed', lambda *_: self._update_warning())
         self._update_warning()
-        self.connect('closed', lambda *_: [self.tokens.set(h, r.get_text().strip())
-                                           for h, r in self.rows.items()])
+        self.connect('closed', lambda *_: self._save())
+
+    def _save(self):
+        for host, row in self.rows.items():
+            token = row.get_text().strip()
+            if token == self.initial[host]:
+                continue
+            try:
+                self.tokens.set(host, token)
+            except TokenStoreError:
+                self.on_error(f'Could not save {host} token securely (keyring unavailable)')
 
     def _update_warning(self):
         github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.repos)

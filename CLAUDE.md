@@ -22,10 +22,10 @@ Package `painel/` (installed to `<prefix>/share/painel/painel/`; new modules mus
 
 - `repo_id.py` — repo identity string `host/path` (`github.com/o/r`, `gitlab.com/g/sub/p`): `parse` (bare `o/r` = GitHub; GitLab only for `gitlab.com` / `gitlab.*`), `migrate` (legacy bare `o/r` entries), `host_of`.
 - `status.py` — `RepoStatus` frozen dataclass; the only shape UI consumes. CI vocabulary: `success|failure|running|cancelled|none`.
-- `http.py` — `HttpClient` port, `UrllibClient`, `HttpError(code)`, `NetworkError`.
+- `http.py` — `HttpClient` port, `UrllibClient`, `HttpError(code)`, `NetworkError`. Redirects to another host strip `Authorization`/`PRIVATE-TOKEN` (urllib forwards them by default); keep that when touching the client.
 - `github.py` / `gitlab.py` — `fetch(path, token) -> RepoStatus`, raise on failure. Deliberate quirks: GitHub `open_issues_count` includes PRs (issues = count - PRs, PR count from search API); GitLab project payload omits the issue count when anonymous (use `/issues_statistics`), MR count is the `X-Total` header, GitLab statuses mapped in `_CI`.
 - `service.py` — `StatusService`: host -> provider, converts every failure into `RepoStatus(error=...)`. Add a provider = new module + branch in `_provider` + tests.
-- `tokens.py` — `TokenStore` (libsecret, keyed by `host`; legacy `purpose=github-token` fallback). Never store tokens in GSettings/files.
+- `tokens.py` — `TokenStore` (libsecret, keyed by `host`; legacy `purpose=github-token` fallback). Never store tokens in GSettings/files; keyring failures raise `TokenStoreError` (no plaintext fallback).
 - `window.py` / `card.py` / `prefs.py` / `main.py` — UI. `App` builds `StatusService` and `TokenStore` and injects them into `Window`. One daemon thread per repo per refresh, results return via `GLib.idle_add`; cards removed mid-fetch are ignored. GSettings keys: `repos`, `refresh-seconds`.
 
 ## Open items before Flathub submission

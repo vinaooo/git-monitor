@@ -108,4 +108,5 @@ class Window(Adw.ApplicationWindow):
             card.update(data)
 
     def show_prefs(self):
-        Prefs(self.settings, self.tokens, self.cards).present(self)
+        Prefs(self.settings, self.tokens, self.cards,
+              lambda msg: self.toasts.add_toast(Adw.Toast(title=msg))).present(self)

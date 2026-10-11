@@ -27,3 +27,15 @@ class ServiceTest(unittest.TestCase):
 
     def test_unknown_host(self):
         self.assertIn('Unsupported', self.fetch(None, 'example.com/a/b').error)
+
+
+class SecretHygieneTest(unittest.TestCase):
+    def test_errors_never_contain_token(self):
+        for err in (NetworkError('boom'), HttpError(403), KeyError('x')):
+            s = StatusService(FakeHttp(error=err)).fetch('github.com/o/r', 's3cret-token')
+            self.assertNotIn('s3cret-token', s.error)
+
+    def test_gitlab_uses_https_and_own_host(self):
+        http = FakeHttp(error=HttpError(404))
+        StatusService(http).fetch('gitlab.example.org/a/b', 'tok')
+        self.assertTrue(all(u.startswith('https://gitlab.example.org/') for u in http.urls))
