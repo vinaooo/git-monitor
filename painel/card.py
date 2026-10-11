@@ -1,4 +1,4 @@
-from gi.repository import Adw, Gdk, Gtk
+from gi.repository import Adw, Gdk, GObject, Gtk
 
 CI = {'success': ('Passing', 'success'), 'failure': ('Failing', 'error'),
       'running': ('Running', 'accent'), 'cancelled': ('Cancelled', 'warning'),
@@ -6,7 +6,7 @@ CI = {'success': ('Passing', 'success'), 'failure': ('Failing', 'error'),
 
 
 class Card(Gtk.Box):
-    def __init__(self, full_name, on_remove, on_rename, custom_title=None):
+    def __init__(self, full_name, on_remove, on_rename, on_reorder, custom_title=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.add_css_class('card')
         for s in ('top', 'bottom', 'start', 'end'):
@@ -37,6 +37,18 @@ class Card(Gtk.Box):
         for s in ('top', 'bottom', 'start', 'end'):
             getattr(box, f'set_margin_{s}')(12)
         self.append(box)
+        self._setup_drag_and_drop(full_name, on_reorder)
+
+    def _setup_drag_and_drop(self, ident, on_reorder):
+        source = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
+        source.connect('prepare', lambda *_: Gdk.ContentProvider.new_for_value(ident))
+        source.connect('drag-begin', lambda src, _drag: src.set_icon(Gtk.WidgetPaintable.new(self), 0, 0))
+        self.add_controller(source)
+        target = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        target.connect('enter', lambda *_: self.set_opacity(0.6) or Gdk.DragAction.MOVE)
+        target.connect('leave', lambda *_: self.set_opacity(1))
+        target.connect('drop', lambda _t, src, *_: self.set_opacity(1) or on_reorder(src, ident) or True)
+        self.add_controller(target)
 
     def _build_title_row(self):
         self.pencil = Gtk.Button(icon_name='document-edit-symbolic', tooltip_text='Rename card',

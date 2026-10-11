@@ -4,6 +4,7 @@ from gi.repository import Adw, GLib, Gtk
 
 from . import repo_id
 from .card import Card
+from .ordering import move
 from .prefs import Prefs
 from .titles import TitleStore
 
@@ -59,7 +60,7 @@ class Window(Adw.ApplicationWindow):
         self.stack.set_visible_child_name('list' if self.cards else 'empty')
 
     def _add_card(self, name):
-        card = Card(name, self.remove_repo, self.rename_repo, self.titles.get(name))
+        card = Card(name, self.remove_repo, self.rename_repo, self.reorder_repo, self.titles.get(name))
         self.cards[name] = card
         self.flow.append(card)
 
@@ -86,6 +87,13 @@ class Window(Adw.ApplicationWindow):
         self._add_card(name)
         self._sync_stack()
         self.refresh()
+
+    def reorder_repo(self, src, dst):
+        order = move(self.settings.get_strv('repos'), src, dst)
+        self.settings.set_strv('repos', order)
+        child = self.cards[src].get_parent()  # FlowBoxChild
+        self.flow.remove(child)
+        self.flow.insert(child, order.index(src))
 
     def rename_repo(self, name, title):
         self.titles.set(name, title)
