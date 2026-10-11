@@ -5,12 +5,15 @@ from gi.repository import Adw, GLib, Gtk
 from . import repo_id
 from .card import Card
 from .prefs import Prefs
+from .titles import TitleStore
 
 class Window(Adw.ApplicationWindow):
     def __init__(self, app, settings, service, tokens):
         super().__init__(application=app, title='Painel', default_width=800, default_height=600)
         self.settings, self.service, self.tokens = settings, service, tokens
         self.cards = {}
+        self.titles = TitleStore(settings.get_value('titles').unpack(),
+                                 lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
         self.timer = 0
 
         header = Adw.HeaderBar()
@@ -56,7 +59,7 @@ class Window(Adw.ApplicationWindow):
         self.stack.set_visible_child_name('list' if self.cards else 'empty')
 
     def _add_card(self, name):
-        card = Card(name, self.remove_repo)
+        card = Card(name, self.remove_repo, self.rename_repo, self.titles.get(name))
         self.cards[name] = card
         self.flow.append(card)
 
@@ -84,7 +87,12 @@ class Window(Adw.ApplicationWindow):
         self._sync_stack()
         self.refresh()
 
+    def rename_repo(self, name, title):
+        self.titles.set(name, title)
+        self.cards[name].set_custom_title(self.titles.get(name))
+
     def remove_repo(self, name):
+        self.titles.remove(name)
         card = self.cards.pop(name)
         self.flow.remove(card.get_parent())
         self.settings.set_strv('repos', [r for r in self.settings.get_strv('repos') if r != name])
