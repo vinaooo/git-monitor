@@ -5,6 +5,7 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Adw, Gio, Gtk
 
+from . import style
 from .http import UrllibClient
 from .service import StatusService
 from .tokens import TokenStore
@@ -26,6 +27,10 @@ class App(Adw.Application):
             act = Gio.SimpleAction.new(name, None)
             act.connect('activate', cb)
             self.add_action(act)
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        style.install()
 
     def do_activate(self):
         (self.props.active_window or Window(self, self.settings, self.service, self.tokens)).present()

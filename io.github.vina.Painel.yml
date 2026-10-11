@@ -9,6 +9,7 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
+  - --filesystem=xdg-config/gtk-4.0:ro
 modules:
   - name: painel
     buildsystem: meson

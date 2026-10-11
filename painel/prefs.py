@@ -1,4 +1,4 @@
-from gi.repository import Adw
+from gi.repository import Adw, Gtk
 
 from . import repo_id
 from .tokens import TokenStoreError
@@ -6,7 +6,7 @@ from .rate_limit import github_warning
 
 
 class Prefs(Adw.PreferencesDialog):
-    def __init__(self, settings, tokens, repos, on_error):
+    def __init__(self, settings, tokens, repos, on_error, active=None):
         super().__init__(title='Preferences')
         page, group = Adw.PreferencesPage(), Adw.PreferencesGroup(title='Refresh')
         page.add(group)
@@ -16,7 +16,17 @@ class Prefs(Adw.PreferencesDialog):
         interval.set_title('Refresh interval (seconds)')
         settings.bind('refresh-seconds', interval, 'value', 0)
         group.add(interval)
-        self.interval, self.repos = interval, repos
+        layout = Adw.ComboRow(title='Group layout', model=Gtk.StringList.new(['Tabs', 'Sidebar']))
+        layout.set_selected(1 if settings.get_string('layout') == 'sidebar' else 0)
+        layout.connect('notify::selected', lambda r, _p: settings.set_string('layout', ('tabs', 'sidebar')[r.get_selected()]))
+        group.add(layout)
+        self.interval, self.all_repos, self.active = interval, list(repos), list(repos if active is None else active)
+        every = Adw.SwitchRow(title='Refresh groups out of focus',
+                              subtitle='Also update groups you are not viewing. Uses more API requests.')
+        settings.bind('refresh-all-groups', every, 'active', 0)
+        every.connect('notify::active', lambda *_: self._update_warning())
+        group.add(every)
+        self.every = every
 
         token_group = Adw.PreferencesGroup(title='Access tokens (optional)',
                                       description='For private repos and higher rate limits. Use read-only tokens: '
@@ -46,7 +56,8 @@ class Prefs(Adw.PreferencesDialog):
                 self.on_error(f'Could not save {host} token securely (keyring unavailable)')
 
     def _update_warning(self):
-        github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.repos)
+        refreshed = self.all_repos if self.every.get_active() else self.active  # repos hit each cycle
+        github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in refreshed)
         has_token = bool(self.rows[repo_id.GITHUB_HOST].get_text().strip())
         warning = github_warning(self.interval.get_value(), github, has_token)
         self.interval.set_subtitle(warning or '')
