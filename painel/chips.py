@@ -10,7 +10,7 @@ _PR = (('changes', '✎ {n} changes', 'error'), ('failing', '✗ {n} CI failing'
        ('approved', '✓ {n} ready', 'success'), ('draft', '{n} draft', 'dim-label'))
 
 
-_GITHUB_QUERY = {'draft': 'draft%3Atrue', 'approved': 'review%3Aapproved', 'changes': 'review%3Achanges_requested',
+_GITHUB_QUERY = {'draft': 'draft%3Atrue', 'approved': 'status%3Asuccess+-review%3Arequired', 'changes': 'review%3Achanges_requested',
                  'waiting': 'review%3Arequired+draft%3Afalse', 'failing': 'status%3Afailure'}
 _GITLAB_QUERY = {'draft': '&draft=yes', 'approved': '&draft=no', 'waiting': '&draft=no'}  # no review-state filters
 

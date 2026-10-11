@@ -40,7 +40,7 @@ class PrBucketTest(unittest.TestCase):
         return pr_bucket_github(node)
 
     def test_github_buckets(self):
-        self.assertEqual(self.gh(), 'waiting')
+        self.assertEqual(self.gh(), 'approved')  # default node: green checks, no review rule
         self.assertEqual(self.gh(reviewDecision='APPROVED'), 'approved')
         self.assertEqual(self.gh(reviewDecision='REVIEW_REQUIRED'), 'waiting')
         self.assertEqual(self.gh(reviewDecision='CHANGES_REQUESTED'), 'changes')
@@ -54,6 +54,11 @@ class PrBucketTest(unittest.TestCase):
         self.assertEqual(self.gh(reviewDecision='APPROVED', commits=failing), 'failing')
         self.assertEqual(self.gh(commits={'nodes': []}, reviewDecision='APPROVED'), 'approved')
         self.assertEqual(self.gh(commits={'nodes': [{'commit': {'statusCheckRollup': None}}]}), 'waiting')
+
+    def test_github_green_without_review_rule_is_ready(self):
+        green = {'nodes': [{'commit': {'statusCheckRollup': {'state': 'SUCCESS'}}}]}
+        self.assertEqual(self.gh(commits=green), 'approved')  # reviewDecision null: no rule, nothing to wait for
+        self.assertEqual(self.gh(commits=green, reviewDecision='REVIEW_REQUIRED'), 'waiting')
 
     def test_gitlab_buckets(self):
         for status, bucket in (('mergeable', 'approved'), ('requested_changes', 'changes'),
