@@ -20,7 +20,7 @@ class GroupPage(Gtk.Stack):
                                 homogeneous=True, margin_top=12, margin_bottom=12,
                                 margin_start=12, margin_end=12)
         self.animator = FlipAnimator(self.flow, self.slots)
-        drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        drop = Gtk.DropTarget.new(GObject.TYPE_VARIANT, Gdk.DragAction.MOVE)
         drop.connect('motion', lambda _t, x, y: self.drag_over(x, y) or Gdk.DragAction.MOVE)
         drop.connect('drop', lambda *_: self.drag_dropped() or bool(self.dragging))
         self.add_controller(drop)  # whole page, not just the cards: margins and gaps must not cancel the drop
