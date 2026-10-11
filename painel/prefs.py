@@ -17,14 +17,14 @@ class Prefs(Adw.PreferencesDialog):
         group.add(interval)
         self.interval, self.repos = interval, repos
 
-        tokens = Adw.PreferencesGroup(title='Access tokens (optional)',
+        token_group = Adw.PreferencesGroup(title='Access tokens (optional)',
                                       description='For private repos and higher rate limits')
-        page.add(tokens)
+        page.add(token_group)
         self.tokens, self.rows = tokens, {}
         for host in dict.fromkeys(['github.com', 'gitlab.com', *map(repo_id.host_of, repos)]):
             row = Adw.PasswordEntryRow(title=host)
             row.set_text(tokens.get(host) or '')
-            tokens.add(row)
+            token_group.add(row)
             self.rows[host] = row
         interval.connect('notify::value', lambda *_: self._update_warning())
         self.rows['github.com'].connect('changed', lambda *_: self._update_warning())
