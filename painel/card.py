@@ -192,15 +192,12 @@ class Card(Gtk.Box):
             self.add_css_class(f'health-{severity(s)}')
 
     def _chip_label(self, chip):
-        label = Gtk.Label(label=chip.text, css_classes=['chip', chip.css], tooltip_text=chip.tooltip or None)
-        if chip.url:  # PR/MR chips open the matching list in the browser
-            label.add_css_class('chip-link')
-            label.set_cursor(Gdk.Cursor.new_from_name('pointer'))
-            click = Gtk.GestureClick()
-            click.connect('released', lambda *_: self._launch(chip.url))
-            label.add_controller(click)
-            label.set_tooltip_text((chip.tooltip + '\n\n' if chip.tooltip else '') + 'Click to open in browser')
-        return label
+        if chip.url:  # PR/MR chips open the matching list in the browser; a real button so keyboard/Orca reach it
+            button = Gtk.Button(label=chip.text, css_classes=['flat', 'chip', 'chip-link', chip.css],
+                                tooltip_text=(chip.tooltip + '\n\n' if chip.tooltip else '') + 'Open in browser')
+            button.connect('clicked', lambda *_: self._launch(chip.url))
+            return button
+        return Gtk.Label(label=chip.text, css_classes=['chip', chip.css], tooltip_text=chip.tooltip or None)
 
     def _launch(self, url):
         Gtk.UriLauncher(uri=url).launch(self.get_root(), None, None, None)
