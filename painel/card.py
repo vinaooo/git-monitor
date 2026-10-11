@@ -64,15 +64,24 @@ class Card(Gtk.Box):
         self.title_stack.add_named(view, 'view')
         self.title_stack.add_named(edit, 'edit')
 
+        self.hovered = False
         motion = Gtk.EventControllerMotion()  # pencil only while the pointer is over the card
-        motion.connect('enter', lambda *_: self.pencil.set_opacity(1))
-        motion.connect('leave', lambda *_: self.pencil.set_opacity(1 if self.pencil.has_focus() else 0))
+        motion.connect('enter', lambda *_: self._set_hover(True))
+        motion.connect('leave', lambda *_: self._set_hover(False))
         self.add_controller(motion)
         focus = Gtk.EventControllerFocus()  # keyboard users can reach it too
-        focus.connect('enter', lambda *_: self.pencil.set_opacity(1))
-        focus.connect('leave', lambda *_: self.pencil.set_opacity(0))
+        focus.connect('enter', lambda *_: self._sync_pencil())
+        focus.connect('leave', lambda *_: self._sync_pencil())
         self.pencil.add_controller(focus)
         return self.title_stack
+
+    def _set_hover(self, hovered):
+        self.hovered = hovered
+        self._sync_pencil()
+
+    def _sync_pencil(self):
+        # has_visible_focus: keyboard focus only, a mouse click must not pin the pencil
+        self.pencil.set_opacity(1 if self.hovered or self.pencil.has_visible_focus() else 0)
 
     def _start_edit(self):
         self.entry.set_text(self.custom_title or self.fetched_name)
@@ -85,6 +94,7 @@ class Card(Gtk.Box):
     def _on_entry_key(self, _ctl, keyval, *_):
         if keyval == Gdk.KEY_Escape:
             self.title_stack.set_visible_child_name('view')
+            self._sync_pencil()
             return True
         return False
 
@@ -92,6 +102,7 @@ class Card(Gtk.Box):
         self.custom_title = title
         self.title.set_label(title or self.fetched_name)
         self.title_stack.set_visible_child_name('view')
+        self._sync_pencil()
 
     def _open(self, *_):
         if self.url:
