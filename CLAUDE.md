@@ -31,6 +31,8 @@ Package `painel/` (installed to `<prefix>/share/painel/painel/`; new modules mus
 - `motion.py` — FLIP animation: `Slot` paints a card displaced, `FlipAnimator` measures layout before/after in the frame-clock `layout` phase.
 - `window.py` — Files-style layout: `Adw.OverlaySplitView` whose sidebar pane (own header bar + group list + bottom new-group button) spans the full window height and whose content pane has its own header (title = current group). One `Adw.TabView` (page per group) is the single source of UI truth: tabs layout = `Adw.TabBar`, sidebar layout = `Gtk.ListView` over `tab_view.get_pages()` inside `Adw.OverlaySplitView`. Handles group actions, cross-group moves (`move_to_group`, deferred with `idle_add` so the drag source is moved after the drag ends; drop targets: TabBar extra drop target, sidebar rows, card right-click menu), shared `cards` dict, refresh (only the selected group, and again whenever the selection changes; one daemon thread per repo, results via `GLib.idle_add`). `card.py`/`prefs.py`/`main.py` — card UI (hover pencil rename, drag source, group menu), preferences (interval, layout, per-host tokens), app + dependency injection. GSettings keys: `groups`, `layout`, `titles` (`a{ss}`, custom titles via `titles.py:TitleStore`), `refresh-seconds`, legacy `repos`.
 
+Flatpak finish-args include `--filesystem=xdg-config/gtk-4.0:ro` so libadwaita picks up the user's custom `~/.config/gtk-4.0/gtk.css` theme (sandbox `XDG_CONFIG_HOME` differs from the host's); Flathub review may question it.
+
 ## Open items before Flathub submission
 
 App ID `io.github.vina.Painel` is a placeholder (must match a real repo/domain), plus missing screenshots and metainfo `<developer>` tag.
