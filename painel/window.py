@@ -76,8 +76,13 @@ class Window(Adw.ApplicationWindow):
         content.append(self.tab_bar)
         self.tab_view.set_vexpand(True)
         content.append(self.tab_view)
-        self.split = Adw.OverlaySplitView(sidebar=Gtk.ScrolledWindow(child=self._build_sidebar()), content=content,
-                                          show_sidebar=False, max_sidebar_width=240)
+        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        sidebar.append(Gtk.ScrolledWindow(child=self._build_sidebar(), vexpand=True))
+        new_group = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='New group', halign=Gtk.Align.END,
+                               margin_top=6, margin_bottom=6, margin_end=6, css_classes=['flat'])
+        new_group.connect('clicked', self.ask_new_group)
+        sidebar.append(new_group)
+        self.split = Adw.OverlaySplitView(sidebar=sidebar, content=content, show_sidebar=False, max_sidebar_width=240)
         self.toasts = Adw.ToastOverlay(child=self.split)
         view = Adw.ToolbarView(content=self.toasts)
         view.add_top_bar(header)

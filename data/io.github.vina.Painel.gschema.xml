@@ -3,7 +3,7 @@
   <schema id="io.github.vina.Painel" path="/io/github/vina/Painel/">
     <key name="repos" type="as"><default>[]</default><summary>Legacy flat repository list, only migrated into groups</summary></key>
     <key name="groups" type="a(sas)"><default>[]</default><summary>Repository groups: (name, repositories)</summary></key>
-    <key name="layout" type="s"><choices><choice value="tabs"/><choice value="sidebar"/></choices><default>"tabs"</default><summary>How groups are shown</summary></key>
+    <key name="layout" type="s"><choices><choice value="tabs"/><choice value="sidebar"/></choices><default>"sidebar"</default><summary>How groups are shown</summary></key>
     <key name="titles" type="a{ss}"><default>{}</default><summary>Custom card titles by repository</summary></key>
     <key name="refresh-seconds" type="i"><range min="15" max="3600"/><default>60</default><summary>Auto refresh interval</summary></key>
   </schema>
