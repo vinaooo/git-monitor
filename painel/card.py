@@ -187,7 +187,7 @@ class Card(Gtk.Box):
             self.stats.set_label(s.error)
             return
         self.url = s.url
-        self.stats.set_label(f'{s.issues} open issues')
+        self.stats.set_label(f'{s.issues} open issue{"" if s.issues == 1 else "s"}')
         if severity(s) != 'none':
             self.add_css_class(f'health-{severity(s)}')
 

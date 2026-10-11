@@ -77,16 +77,19 @@ class Window(Adw.ApplicationWindow):
         # content pane: own header bar (title = current group), like Files
         self.window_title = Adw.WindowTitle(title='Painel', subtitle='')
         content_header = Adw.HeaderBar(title_widget=self.window_title, show_start_title_buttons=False)
-        add = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='Add repository')
-        add.connect('clicked', self.ask_repo)
+        act = Gio.SimpleAction.new('add-repo', None)
+        act.connect('activate', self.ask_repo)
+        self.add_action(act)
+        add = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='Add repository', action_name='win.add-repo')
         refresh = Gtk.Button(icon_name='view-refresh-symbolic', tooltip_text='Refresh')
         refresh.connect('clicked', lambda *_: self.refresh())
         content_header.pack_start(add)
         content_header.pack_start(refresh)
         self.content_menu = Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu)  # tabs layout only
         content_header.pack_end(self.content_menu)
-        content_header.pack_end(Gtk.MenuButton(icon_name='view-grid-symbolic', always_show_arrow=True,
-                                               tooltip_text='View and sort', menu_model=self._build_view_menu()))
+        self.view_button = Gtk.MenuButton(icon_name='view-grid-symbolic', always_show_arrow=True,
+                                          tooltip_text='View and sort', menu_model=self._build_view_menu())
+        content_header.pack_end(self.view_button)
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         content.append(self.tab_bar)
         content.append(self.tab_view)
@@ -170,6 +173,7 @@ class Window(Adw.ApplicationWindow):
     def _apply_view(self):
         columns = {'grid-small': 6, 'grid-medium': 4, 'grid-large': 2, 'list': 1}
         mode = self.settings.get_string('view')
+        self.view_button.set_icon_name('view-list-symbolic' if mode == 'list' else 'view-grid-symbolic')
         for page in self.pages.values():
             page.set_view(columns[mode], mode == 'list')
 

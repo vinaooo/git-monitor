@@ -12,7 +12,7 @@ class GroupPage(Gtk.Stack):
     """One group's grid of cards, with the live drag-reorder preview (blank slot + FLIP animation)."""
 
     def __init__(self, name, groups, can_reorder=lambda: True):
-        super().__init__()
+        super().__init__(transition_type=Gtk.StackTransitionType.CROSSFADE)
         self.name, self.groups, self.dragging, self.slots = name, groups, None, {}
         self.can_reorder, self.compact = can_reorder, False
         self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, valign=Gtk.Align.START,
@@ -24,8 +24,11 @@ class GroupPage(Gtk.Stack):
         drop.connect('motion', lambda _t, x, y: self.drag_over(x, y) or Gdk.DragAction.MOVE)
         drop.connect('drop', lambda *_: self.drag_dropped() or bool(self.dragging))
         self.add_controller(drop)  # whole page, not just the cards: margins and gaps must not cancel the drop
-        self.add_named(Adw.StatusPage(title='Empty group', icon_name='io.github.vina.Painel-symbolic',
-                                      description='Add a repository, or drag a card onto this group.'), 'empty')
+        add = Gtk.Button(label='Add Repository', halign=Gtk.Align.CENTER, action_name='win.add-repo',
+                         css_classes=['suggested-action', 'pill'])
+        self.add_named(Adw.StatusPage(title='No Repositories', icon_name='io.github.vina.Painel-symbolic',
+                                      description='Add a repository, or drag a card onto this group.',
+                                      child=add), 'empty')
         self.add_named(Gtk.ScrolledWindow(child=self.flow), 'list')
         self._sync()
 
