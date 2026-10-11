@@ -160,7 +160,7 @@ class Card(Gtk.Box):
 
     def _open(self, *_):
         if self.url:
-            Gtk.UriLauncher(uri=self.url).launch(self.get_root(), None, None, None)
+            self._launch(self.url)
 
     def update(self, s):
         self.status = s
@@ -178,6 +178,20 @@ class Card(Gtk.Box):
         if severity(s) != 'none':
             self.add_css_class(f'health-{severity(s)}')
 
+    def _chip_label(self, chip):
+        label = Gtk.Label(label=chip.text, css_classes=['chip', chip.css], tooltip_text=chip.tooltip or None)
+        if chip.url:  # PR/MR chips open the matching list in the browser
+            label.add_css_class('chip-link')
+            label.set_cursor(Gdk.Cursor.new_from_name('pointer'))
+            click = Gtk.GestureClick()
+            click.connect('released', lambda *_: self._launch(chip.url))
+            label.add_controller(click)
+            label.set_tooltip_text((chip.tooltip + '\n\n' if chip.tooltip else '') + 'Click to open in browser')
+        return label
+
+    def _launch(self, url):
+        Gtk.UriLauncher(uri=url).launch(self.get_root(), None, None, None)
+
     def _set_chips(self, groups):
         while child := self.chips.get_first_child():
             self.chips.remove(child)
@@ -187,7 +201,7 @@ class Card(Gtk.Box):
             flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=False, min_children_per_line=1,
                                max_children_per_line=2, column_spacing=6, row_spacing=4, halign=Gtk.Align.START)
             for chip in chips:
-                flow.append(Gtk.Label(label=chip.text, css_classes=['chip', chip.css], tooltip_text=chip.tooltip or None))
+                flow.append(self._chip_label(chip))
             row = Gtk.Box(spacing=8, valign=Gtk.Align.START)
             row.append(Gtk.Label(label=name, css_classes=['dim-label', 'caption'], width_chars=3, xalign=0, yalign=0.5))
             row.append(flow)
