@@ -15,15 +15,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - run: python3 -m unittest discover -s tests -t .
+      - run: sudo apt-get update && sudo apt-get install -y python3-gi gir1.2-secret-1 gir1.2-glib-2.0
+      - run: /usr/bin/python3 -m unittest discover -s tests -t .  # system python: tokens test needs PyGObject
 
   lint:
     runs-on: ubuntu-latest
@@ -40,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: >
-          sudo apt-get update && sudo apt-get install -y meson ninja-build libglib2.0-dev-bin
+          sudo apt-get update && sudo apt-get install -y meson ninja-build libglib2.0-dev libglib2.0-dev-bin desktop-file-utils libgtk-4-bin
           gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1 python3-gi
       - run: meson setup build --prefix=$PWD/_prefix && meson install -C build
       - name: Every module imports
