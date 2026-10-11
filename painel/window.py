@@ -6,6 +6,7 @@ from . import repo_id
 from .card import Card
 from .group_page import GroupPage
 from .groups import Groups
+from .health import group_severity, severity
 from .motion import Slot
 from .prefs import Prefs
 from .sorting import sorted_order
@@ -40,6 +41,7 @@ class Window(Adw.ApplicationWindow):
         settings.connect('changed::refresh-seconds', lambda *_: self.restart_timer())
         settings.connect('changed::layout', lambda *_: self._apply_layout())
         settings.connect('changed::view', lambda *_: self._apply_view())
+        settings.connect('changed::refresh-all-groups', lambda *_: self._update_marks())
         for key in ('sort', 'sort-reverse'):
             settings.connect(f'changed::{key}', lambda *_: self._apply_sort())
 
@@ -61,7 +63,9 @@ class Window(Adw.ApplicationWindow):
 
         self.tab_view = Adw.TabView(vexpand=True)
         self.tab_view.connect('close-page', self._on_close_page)
-        self.tab_view.connect('page-reordered', lambda *_: self.groups.set_group_order(self._tab_order()))
+        self.tab_view.connect('page-reordered', lambda *_: (self.groups.set_group_order(self._tab_order()),
+                                                            GLib.idle_add(self._tint_tabs)))
+        self.tab_view.connect('page-attached', lambda *_: GLib.idle_add(self._tint_tabs))  # tab widgets appear after this
         self.tab_view.connect('notify::selected-page', lambda *_: self._update_actions())
         self.tab_bar = Adw.TabBar(view=self.tab_view, autohide=False)
         new_tab = Gtk.Button(icon_name='tab-new-symbolic', tooltip_text='New group', css_classes=['flat'])
@@ -128,19 +132,30 @@ class Window(Adw.ApplicationWindow):
         factory = Gtk.SignalListItemFactory()
 
         def setup(_f, item):
-            label = Gtk.Label(xalign=0, margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
+            row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
+            row.append(Gtk.Label(xalign=0, hexpand=True))
             drop = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
             drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident))
-            label.add_controller(drop)
-            item.set_child(label)
+            row.add_controller(drop)
+            item.set_child(row)
 
         def bind(_f, item):
-            item.binding = item.get_item().bind_property('title', item.get_child(), 'label',
-                                                          GObject.BindingFlags.SYNC_CREATE)
+            page, row = item.get_item(), item.get_child()
+            item.bindings = [page.bind_property('title', row.get_first_child(), 'label', GObject.BindingFlags.SYNC_CREATE)]
+            def tint(*_):
+                if row.get_parent():  # the ListView row widget; not parented yet while binding
+                    self._set_tint(row.get_parent(), page.get_keyword())
+
+            item.tint_handler = page.connect('notify::keyword', tint)
+            GLib.idle_add(tint)
+
+        def unbind(_f, item):
+            [b.unbind() for b in item.bindings]
+            item.get_item().disconnect(item.tint_handler)
 
         factory.connect('setup', setup)
         factory.connect('bind', bind)
-        factory.connect('unbind', lambda _f, item: item.binding.unbind())
+        factory.connect('unbind', unbind)
         lst = Gtk.ListView(model=self.tab_view.get_pages(), factory=factory)
         lst.add_css_class('navigation-sidebar')
         return lst
@@ -164,6 +179,39 @@ class Window(Adw.ApplicationWindow):
             order = [i for i in self.groups.repos(name) if i in self.cards]  # cards are created one by one at startup
             info = {i: (self.cards[i].title.get_label(), self.cards[i].status) for i in order}
             self.pages[name].apply_order(sorted_order(order, mode, reverse, info))
+
+    # --- group health tint on the tab / sidebar row (only meaningful while every group is refreshed) ---
+    _TINTS = ('tint-error', 'tint-warning', 'tint-accent', 'tint-success')
+
+    @classmethod
+    def _set_tint(cls, widget, sev):
+        for css in cls._TINTS:
+            widget.remove_css_class(css)
+        if sev and sev != 'none':
+            widget.add_css_class(f'tint-{sev}')
+
+    def _update_marks(self):
+        every = self.settings.get_boolean('refresh-all-groups')
+        for name, page in self.pages.items():
+            sev = group_severity([severity(self.cards[i].status) for i in self.groups.repos(name) if i in self.cards]) \
+                if every else 'none'
+            self.tab_view.get_page(page).set_keyword(sev)  # carries the severity: sidebar rows follow its notify
+        self._tint_tabs()
+
+    def _tint_tabs(self):
+        """AdwTabBar has no per-tab API, so find its internal `tab` widgets and tag them by page."""
+        def walk(widget):
+            yield widget
+            child = widget.get_first_child()
+            while child:
+                yield from walk(child)
+                child = child.get_next_sibling()
+
+        for widget in walk(self.tab_bar):
+            if widget.get_css_name() == 'tab' and widget.find_property('page'):
+                page = widget.get_property('page')
+                if page:
+                    self._set_tint(widget, page.get_keyword())
 
     # --- groups ---
     def _tab_order(self):
@@ -293,6 +341,7 @@ class Window(Adw.ApplicationWindow):
         self.cards.pop(name)
         self.pages[self.groups.group_of(name)].remove_slot(name)
         self.groups.remove_repo(name)
+        self._update_marks()
 
     # --- moving between groups ---
     def other_groups(self, ident):
@@ -313,6 +362,7 @@ class Window(Adw.ApplicationWindow):
         self.groups.move_repo(ident, group)
         self.pages[group].add_slot(ident, slot)
         self._apply_sort(group)
+        self._update_marks()
         self.toasts.add_toast(Adw.Toast(title=f'Moved to {group}'))
 
     # --- drag routing (a card may have changed group since its callbacks were bound) ---
@@ -356,6 +406,7 @@ class Window(Adw.ApplicationWindow):
         if card:
             card.update(data)
             self._apply_sort(self.groups.group_of(name))
+            self._update_marks()
 
     def show_prefs(self):
         Prefs(self.settings, self.tokens, self.cards,

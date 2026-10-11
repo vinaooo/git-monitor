@@ -70,3 +70,11 @@ def severity(status):
     if ci.get('running'):
         return 'accent'
     return 'success' if ci.get('success') or pr.get('approved') else 'none'
+
+
+SEVERITY_ORDER = ('error', 'warning', 'accent', 'success')  # worst first
+
+
+def group_severity(severities):
+    """Worst card severity in a group (what the tab / sidebar dot shows)."""
+    return next((s for s in SEVERITY_ORDER if s in severities), 'none')
