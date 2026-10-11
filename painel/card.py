@@ -13,6 +13,7 @@ class Card(Gtk.Box):
         for s in ('top', 'bottom', 'start', 'end'):
             getattr(self, f'set_margin_{s}')(6)
         self.ident, self.url, self.fetched_name, self.custom_title = full_name, None, full_name, custom_title
+        self.status = None  # last RepoStatus, used by the sort menu
         self.on_rename = lambda text: on_rename(full_name, text)
         self.title = Gtk.Label(label=custom_title or full_name, xalign=0, wrap=True, hexpand=True)
         self.title.add_css_class('title-3')
@@ -30,16 +31,26 @@ class Card(Gtk.Box):
         rm.connect('clicked', lambda *_: on_remove(full_name))
         bar = Gtk.Box(spacing=6)
         bar.append(open_btn)
-        bar.append(Gtk.Box(hexpand=True))
+        self.spacer = Gtk.Box(hexpand=True)
+        bar.append(self.spacer)
         bar.append(rm)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.box = box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         for w in (title_row, self.stats, ci_row, bar):
             box.append(w)
+        self.parts = (title_row, self.stats, ci_row, bar)
         for s in ('top', 'bottom', 'start', 'end'):
             getattr(box, f'set_margin_{s}')(12)
         self.append(box)
         self._setup_drag_and_drop(full_name, on_drag_begin, on_drag_end)
         self._setup_group_menu(other_groups, on_move)
+
+    def set_compact(self, compact):
+        """List view: everything on one row instead of stacked."""
+        self.box.set_orientation(Gtk.Orientation.HORIZONTAL if compact else Gtk.Orientation.VERTICAL)
+        self.box.set_spacing(24 if compact else 8)
+        self.spacer.set_hexpand(not compact)
+        for part in self.parts:
+            part.set_valign(Gtk.Align.CENTER if compact else Gtk.Align.FILL)
 
     def _setup_drag_and_drop(self, ident, on_drag_begin, on_drag_end):
         source = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
@@ -155,6 +166,7 @@ class Card(Gtk.Box):
             Gtk.UriLauncher(uri=self.url).launch(self.get_root(), None, None, None)
 
     def update(self, s):
+        self.status = s
         self.fetched_name = s.name
         self.entry.set_placeholder_text(s.name)
         self.title.set_label(self.custom_title or s.name)
