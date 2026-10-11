@@ -6,7 +6,8 @@ CI = {'success': ('Passing', 'success'), 'failure': ('Failing', 'error'),
 
 
 class Card(Gtk.Box):
-    def __init__(self, full_name, on_remove, on_rename, on_drag_begin, on_drag_end, custom_title=None):
+    def __init__(self, full_name, on_remove, on_rename, on_drag_begin, on_drag_end, custom_title=None,
+                 other_groups=lambda ident: [], on_move=lambda ident, group: None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.add_css_class('card')
         for s in ('top', 'bottom', 'start', 'end'):
@@ -38,6 +39,7 @@ class Card(Gtk.Box):
             getattr(box, f'set_margin_{s}')(12)
         self.append(box)
         self._setup_drag_and_drop(full_name, on_drag_begin, on_drag_end)
+        self._setup_group_menu(other_groups, on_move)
 
     def _setup_drag_and_drop(self, ident, on_drag_begin, on_drag_end):
         source = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
@@ -45,6 +47,27 @@ class Card(Gtk.Box):
         source.connect('drag-begin', lambda src, _drag: self._on_drag_begin(src, ident, on_drag_begin))
         source.connect('drag-end', lambda *_: self._on_drag_end(ident, on_drag_end))
         self.add_controller(source)
+
+    def _setup_group_menu(self, other_groups, on_move):
+        click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
+        click.connect('pressed', lambda _g, _n, x, y: self._show_group_menu(other_groups(self.ident), on_move, x, y))
+        self.add_controller(click)
+
+    def _show_group_menu(self, groups, on_move, x, y):
+        if not groups:
+            return
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.append(Gtk.Label(label='Move to group', xalign=0, margin_start=6, margin_bottom=4, css_classes=['dim-label']))
+        popover = Gtk.Popover(child=box, has_arrow=False, halign=Gtk.Align.START)
+        popover.set_parent(self)
+        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        popover.connect('closed', lambda p: p.unparent())
+        for group in groups:
+            btn = Gtk.Button(label=group, halign=Gtk.Align.FILL, css_classes=['flat'])
+            btn.get_child().set_xalign(0)
+            btn.connect('clicked', lambda _b, g=group: (popover.popdown(), on_move(self.ident, g)))
+            box.append(btn)
+        popover.popup()
 
     def _on_drag_begin(self, source, ident, callback):
         # static snapshot as drag icon, then blank the card: the empty slot is the live drop preview
