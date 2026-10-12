@@ -51,6 +51,7 @@ class HelpersTest(unittest.TestCase):
     def test_ci_url(self):
         self.assertEqual(ci_url('https://github.com/o/r'), 'https://github.com/o/r/actions')
         self.assertEqual(ci_url('https://gitlab.com/g/p'), 'https://gitlab.com/g/p/-/pipelines')
+        self.assertEqual(ci_url('https://codeberg.org/o/r'), 'https://codeberg.org/o/r/actions')
         self.assertEqual(ci_url(''), '')
 
 

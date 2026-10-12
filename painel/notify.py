@@ -2,6 +2,8 @@
 import json
 import os
 
+from .chips import url_kind
+
 KINDS = ('failed', 'recovered', 'broke_running')
 
 
@@ -26,7 +28,7 @@ def wanted(kind, enabled):
 def ci_url(base):
     if not base:
         return ''
-    return f'{base}/actions' if 'github.com' in base else f'{base}/-/pipelines'
+    return f'{base}/-/pipelines' if url_kind(base) == 'gitlab' else f'{base}/actions'
 
 
 class StateStore:

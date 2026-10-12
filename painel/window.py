@@ -24,7 +24,7 @@ from .rate_limit import MIN_SECONDS
 from .search import matches
 from .status import RepoStatus
 from .sorting import sorted_order
-from .virtual import DEFINITIONS, members, shown
+from .virtual import CATEGORIES, DEFINITIONS, members, shown
 from .sources import SourceStore
 from .titles import TitleStore
 
@@ -181,11 +181,11 @@ class Window(Adw.ApplicationWindow):
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.real_list = self._build_sidebar()
         sidebar.append(Gtk.ScrolledWindow(child=self.real_list, vexpand=True))
-        self.virtual_list = self._build_virtual_sidebar()
+        self.virtual_box = self._build_virtual_sidebar()
         # virtual groups sit at the bottom of the sidebar, under a separator
         self.virtual_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, visible=False)
         self.virtual_section.append(Gtk.Separator())
-        self.virtual_section.append(Gtk.ScrolledWindow(child=self.virtual_list, propagate_natural_height=True,
+        self.virtual_section.append(Gtk.ScrolledWindow(child=self.virtual_box, propagate_natural_height=True,
                                                        max_content_height=300, hscrollbar_policy=Gtk.PolicyType.NEVER))
         sidebar.append(self.virtual_section)
         new_group = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='New group', halign=Gtk.Align.END,
@@ -280,7 +280,7 @@ class Window(Adw.ApplicationWindow):
             row.append(Gtk.Image())
             row.append(Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END))
             click = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
-            click.connect('released', lambda *_: self._show_virtual())
+            click.connect('released', lambda *_: self._open_virtual(item.get_item()))
             row.add_controller(click)
             item.set_child(row)
 
@@ -292,8 +292,47 @@ class Window(Adw.ApplicationWindow):
         factory.connect('setup', setup)
         factory.connect('bind', bind)
         factory.connect('unbind', lambda _f, item: item.binding.unbind())
-        lst = Gtk.ListView(model=self.vtab_view.get_pages(), factory=factory, css_classes=['navigation-sidebar', 'dim-selection'])
-        return lst
+        # one list per category, each a filtered view of the same pages; a header toggles its list
+        pages, box = self.vtab_view.get_pages(), Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.virtual_lists, self.virtual_selections = [], []
+        for _cid, title, ids in CATEGORIES:
+            flt = Gtk.FilterListModel(model=pages, filter=Gtk.CustomFilter.new(lambda p, ids=ids: p.get_child().name in ids))
+            sel = Gtk.SingleSelection(model=flt, autoselect=False, can_unselect=True)
+            lst = Gtk.ListView(model=sel, factory=factory, css_classes=['navigation-sidebar', 'dim-selection'])
+            revealer = Gtk.Revealer(child=lst, reveal_child=True, transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN)
+            arrow = Gtk.Image(icon_name='pan-down-symbolic')
+            head = Gtk.Button(css_classes=['flat'], tooltip_text=f'Show or hide {title}',
+                              child=Gtk.Box(spacing=6, margin_start=6))
+            label = Gtk.Label(label=title, xalign=0, hexpand=True, css_classes=['heading', 'dim-label'])
+            head.get_child().append(label)
+            head.get_child().append(arrow)
+            head.connect('clicked', self._toggle_section, revealer, arrow)
+            section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, visible=False)
+            section.append(head)
+            section.append(revealer)
+            flt.connect('items-changed', lambda m, *_, s=section: s.set_visible(m.get_n_items() > 0))
+            flt.connect('items-changed', lambda *_: GLib.idle_add(self._sync_vsel))
+            box.append(section)
+            self.virtual_lists.append(lst)
+            self.virtual_selections.append(sel)
+        pages.connect('selection-changed', lambda *_: self._sync_vsel())
+        return box
+
+    @staticmethod
+    def _toggle_section(_button, revealer, arrow):
+        show = not revealer.get_reveal_child()
+        revealer.set_reveal_child(show)
+        arrow.set_from_icon_name('pan-down-symbolic' if show else 'pan-end-symbolic')
+
+    def _sync_vsel(self):
+        """Highlight the open virtual group in whichever category list holds it."""
+        cur = self.vtab_view.get_selected_page()
+        for sel in self.virtual_selections:
+            sel.set_selected(next((i for i in range(sel.get_n_items()) if sel.get_item(i) == cur), Gtk.INVALID_LIST_POSITION))
+
+    def _open_virtual(self, page):
+        self.vtab_view.set_selected_page(page)
+        self._show_virtual()
 
     def _group_row_menu(self, page, row, x, y):
         self.tab_view.set_selected_page(page)  # the group actions act on the selected group
@@ -477,7 +516,8 @@ class Window(Adw.ApplicationWindow):
     def _show_real(self):
         self.virtual_active = False
         self.real_list.remove_css_class('dim-selection')  # only one sidebar row looks selected
-        self.virtual_list.add_css_class('dim-selection')
+        for lst in self.virtual_lists:
+            lst.add_css_class('dim-selection')
         self._update_actions()
         self._show_body()
 
@@ -485,7 +525,8 @@ class Window(Adw.ApplicationWindow):
         if not self.vtab_view.get_selected_page():
             return
         self.virtual_active = True
-        self.virtual_list.remove_css_class('dim-selection')
+        for lst in self.virtual_lists:
+            lst.remove_css_class('dim-selection')
         self.real_list.add_css_class('dim-selection')
         self._update_actions()
         self._show_body()
@@ -756,7 +797,7 @@ class Window(Adw.ApplicationWindow):
             self.toasts.add_toast(Adw.Toast(title=f'{added} new repositories in {group}'))
 
     def ask_repo(self, *_):
-        entry = Gtk.Entry(placeholder_text='GitHub/GitLab URL or owner/name', activates_default=True)
+        entry = Gtk.Entry(placeholder_text='GitHub/GitLab/Forgejo URL or owner/name', activates_default=True)
         dlg = Adw.AlertDialog(heading='Add repository', extra_child=entry)
         dlg.add_response('cancel', 'Cancel')
         dlg.add_response('add', 'Add')

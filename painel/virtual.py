@@ -14,7 +14,9 @@ DEFINITIONS = (
     Definition('github', 'GitHub', 'Every GitHub repository', 'painel-github-symbolic',
                lambda i, s: repo_id.host_of(i) == repo_id.GITHUB_HOST),
     Definition('gitlab', 'GitLab', 'Every GitLab repository', 'painel-gitlab-symbolic',
-               lambda i, s: repo_id.host_of(i).startswith('gitlab')),
+               lambda i, s: repo_id.kind(repo_id.host_of(i)) == 'gitlab'),
+    Definition('forgejo', 'Forgejo / Gitea', 'Every Forgejo or Gitea repository', 'painel-forgejo-symbolic',
+               lambda i, s: repo_id.kind(repo_id.host_of(i)) == 'forgejo'),
     Definition('ready', 'PR/MR ready', 'Approved and ready to merge', 'object-select-symbolic',
                lambda i, s: _count(s, 'pr_counts', 'approved')),
     Definition('cancelled', 'CI cancelled', 'A CI run was cancelled', 'process-stop-symbolic',
@@ -27,6 +29,14 @@ DEFINITIONS = (
                lambda i, s: _count(s, 'pr_counts', 'waiting')),
     Definition('errors', 'Fetch errors', 'The last refresh failed', 'network-error-symbolic',
                lambda i, s: bool(s and s.error)),
+)
+
+
+# sidebar sections: (id, title, virtual group ids); every definition belongs to exactly one
+CATEGORIES = (
+    ('services', 'Services', ('github', 'gitlab', 'forgejo')),
+    ('prs', 'PR/MR', ('ready', 'attention', 'waiting')),
+    ('ci', 'CI & errors', ('ci-failing', 'cancelled', 'errors')),
 )
 
 

@@ -31,6 +31,11 @@ class SearchTest(unittest.TestCase):
         self.assertTrue(matches('ready', 'i', 't', s))
         self.assertFalse(matches('conflict', 'i', 't', s))
 
+    def test_forgejo_status_words(self):
+        s = RepoStatus(name='o/r', url='https://codeberg.org/o/r', ci_counts={'failure': 1}, pr_counts={'conflict': 1, 'draft': 1})
+        for q in ('failing', 'conflict', 'draft', 'codeberg'):
+            self.assertTrue(matches(q, 'codeberg.org/o/r', 't', s), q)
+
     def test_all_words_must_match(self):
         s = status(pr_counts={'waiting': 1})
         self.assertTrue(matches('waiting api', 'i', 't', s))

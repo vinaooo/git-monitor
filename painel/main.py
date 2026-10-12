@@ -7,7 +7,7 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Adw, Gio, GLib, Gtk
 
-from . import background, search_provider, style
+from . import background, repo_id, search_provider, style
 from .http import CachingClient, UrllibClient
 from .service import StatusService
 from .tokens import TokenStore
@@ -27,6 +27,7 @@ class App(Adw.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID)
         self.settings = Gio.Settings.new(APP_ID)
+        repo_id.set_forgejo_hosts(self.settings.get_strv('forgejo-hosts'))
         self.service, self.tokens = StatusService(CachingClient(UrllibClient())), TokenStore()
         self.menu = Gio.Menu()
         for items in ((('Preferences', 'app.prefs'), ('Keyboard Shortcuts', 'app.shortcuts')),
@@ -100,7 +101,7 @@ class App(Adw.Application):
 
     def about(self, *_):
         Adw.AboutDialog(application_name='Git Monitor', application_icon=APP_ID, version='0.1.0',
-                        comments='Monitor GitHub and GitLab repositories',
+                        comments='Monitor GitHub, GitLab and Forgejo/Gitea repositories',
                         developer_name='Vinicius Pedrinho', website='https://github.com/vinaooo/git-monitor',
                         issue_url='https://github.com/vinaooo/git-monitor/issues',
                         license_type=Gtk.License.MIT_X11).present(self.window())

@@ -29,6 +29,8 @@ class IconStoreTest(unittest.TestCase):
     def test_choices_are_unique_and_include_default(self):
         self.assertEqual(len(CHOICES), len(set(CHOICES)))
         self.assertIn(DEFAULT, CHOICES)
+        for host in ('github', 'gitlab', 'forgejo'):
+            self.assertIn(f'painel-{host}-symbolic', CHOICES)
 
     def test_every_virtual_group_has_an_icon(self):
         for d in DEFINITIONS:

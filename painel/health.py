@@ -51,6 +51,13 @@ def pr_bucket_gitlab(mr):
     return _GITLAB.get(mr.get('detailed_merge_status'), 'waiting')
 
 
+def pr_bucket_forgejo(pr):
+    """Gitea/Forgejo PR -> bucket. Review states would cost one request per PR, so only draft > conflict > waiting."""
+    if pr.get('draft') or pr.get('title', '').upper().startswith('WIP'):
+        return 'draft'
+    return 'conflict' if pr.get('mergeable') is False else 'waiting'
+
+
 def summarize_prs(labelled):
     """[(bucket, label)] -> (counts per bucket, details {bucket: [labels]} capped for tooltips)."""
     counts, details = dict.fromkeys(PR_BUCKETS, 0), {}

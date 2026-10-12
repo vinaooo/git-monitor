@@ -1,5 +1,8 @@
 """What the card shows as colored chips for a RepoStatus. Pure; the card only renders it."""
 from collections import namedtuple
+from urllib.parse import urlsplit
+
+from . import repo_id
 
 Chip = namedtuple('Chip', 'text css tooltip url', defaults=('',))  # url: where a click goes ('' = not clickable)
 
@@ -15,11 +18,19 @@ _GITHUB_QUERY = {'draft': 'draft%3Atrue', 'approved': 'status%3Asuccess+-review%
 _GITLAB_QUERY = {'draft': '&draft=yes', 'approved': '&draft=no', 'waiting': '&draft=no'}  # no review-state filters
 
 
+def url_kind(url):
+    """Provider of a repo web URL (see repo_id.kind); anything unrecognised reads as GitLab, as before."""
+    return repo_id.kind(urlsplit(url).hostname or '') or 'gitlab'
+
+
 def pr_list_url(base, bucket):
     """The repo's open PR/MR list, filtered as far as the platform's URL search allows."""
     if not base:
         return ''
-    if 'github.com' in base:
+    kind = url_kind(base)
+    if kind == 'forgejo':
+        return f'{base}/pulls?state=open'
+    if kind == 'github':
         extra = _GITHUB_QUERY.get(bucket)
         return f'{base}/pulls?q=is%3Apr+is%3Aopen' + (f'+{extra}' if extra else '')
     return f'{base}/-/merge_requests?state=opened' + _GITLAB_QUERY.get(bucket, '')

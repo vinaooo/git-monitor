@@ -10,6 +10,7 @@ CHOICES = (
     'chat-message-new-symbolic', 'mail-unread-symbolic', 'camera-photo-symbolic', 'emoji-nature-symbolic',
     'emoji-travel-symbolic', 'emoji-objects-symbolic', 'weather-clear-symbolic', 'alarm-symbolic',
     'find-location-symbolic', 'input-gaming-symbolic', 'bookmark-new-symbolic',
+    'painel-github-symbolic', 'painel-gitlab-symbolic', 'painel-forgejo-symbolic',  # the app's own (data/*.svg)
 )
 
 

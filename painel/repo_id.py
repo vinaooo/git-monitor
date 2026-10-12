@@ -6,8 +6,30 @@ _URL = re.compile(r'^(?:https?://)?(?:www\.)?([\w.-]+\.[\w.-]+)/(.+)$')
 _BARE = re.compile(r'^([\w.-]+)/([\w.-]+?)(?:\.git)?$')
 
 
+_extra_forgejo = set()
+
+
+def set_forgejo_hosts(hosts):
+    """Self-hosted Forgejo/Gitea instances declared by the user (the name alone can't tell them from GitLab)."""
+    _extra_forgejo.clear()
+    _extra_forgejo.update(h.strip().lower() for h in hosts if h.strip())
+
+
 def is_gitlab_host(host):
     return host == 'gitlab.com' or host.startswith('gitlab.')
+
+
+def is_forgejo_host(host):
+    return host == 'codeberg.org' or host.startswith(('forgejo.', 'gitea.')) or host in _extra_forgejo
+
+
+def kind(host):
+    """'github' | 'gitlab' | 'forgejo' | None for an identity host."""
+    if host == GITHUB_HOST:
+        return 'github'
+    if is_gitlab_host(host):
+        return 'gitlab'
+    return 'forgejo' if is_forgejo_host(host) else None
 
 
 def parse(text):
@@ -17,7 +39,7 @@ def parse(text):
     if m:
         host = m[1].lower()
         path = re.sub(r'\.git$', '', re.split(r'[?#]|/-/', m[2])[0].strip('/'))
-        if host == GITHUB_HOST:
+        if kind(host) in ('github', 'forgejo'):  # exactly owner/repo; extra segments are web pages (/src/..., /pulls)
             parts = path.split('/')
             return f'{host}/{parts[0]}/{parts[1]}' if len(parts) >= 2 and all(parts[:2]) else None
         if is_gitlab_host(host) and '/' in path and re.fullmatch(r'[\w./-]+', path):
@@ -50,7 +72,7 @@ def parse_account(text, default_host=GITHUB_HOST):
         return None
     host = m[1].lower()
     path = re.split(r'[?#]|/-/', m[2])[0].strip('/')
-    if host == GITHUB_HOST:
+    if kind(host) in ('github', 'forgejo'):
         return (host, path) if _NAME.fullmatch(path) else None
     if is_gitlab_host(host) and re.fullmatch(r'[\w.-]+(/[\w.-]+)*', path):
         return host, path

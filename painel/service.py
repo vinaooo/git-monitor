@@ -1,7 +1,8 @@
+from .forgejo import ForgejoProvider
 from .github import BATCH, GitHubProvider
 from .gitlab import GitLabProvider
 from .http import HttpError, NetworkError
-from .repo_id import GITHUB_HOST, host_of, is_gitlab_host
+from .repo_id import GITHUB_HOST, is_forgejo_host, is_gitlab_host
 from .status import RepoStatus
 
 _HTTP_MESSAGES = {404: 'Not found (private? add a token)', 401: 'Invalid token',
@@ -30,6 +31,8 @@ class StatusService:
             return GitHubProvider(self.http)
         if is_gitlab_host(host):
             return GitLabProvider(host, self.http)
+        if is_forgejo_host(host):
+            return ForgejoProvider(host, self.http)
         return None
 
     @staticmethod

@@ -4,7 +4,7 @@ from . import rate_limit, repo_id
 from .importer import default_selection, wanted
 from .interval_row import IntervalRows
 
-HOSTS = ('github.com', 'gitlab.com')
+HOSTS = ('github.com', 'gitlab.com', 'codeberg.org')
 
 
 class ImportDialog(Adw.Dialog):
@@ -22,7 +22,7 @@ class ImportDialog(Adw.Dialog):
         self.found = None  # (host, account, token, infos, truncated) once listed
         self.checks, self.tracked_now = {}, set()  # ident -> CheckButton; idents already tracked when listed
 
-        self.hosts = list(HOSTS)  # a profile URL on another GitLab host appends it
+        self.hosts = list(dict.fromkeys([*HOSTS, *settings.get_strv('forgejo-hosts')]))  # a profile URL on another host appends it
         self.host = Adw.ComboRow(title='Host', model=Gtk.StringList.new(self.hosts))
         self.account = Adw.EntryRow(title='User or organization', activates_default=True)
         self.forks = Adw.SwitchRow(title='Include forks')

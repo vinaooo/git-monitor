@@ -76,10 +76,16 @@ class Prefs(Adw.PreferencesDialog):
         token_group = Adw.PreferencesGroup(title='Access tokens (optional)',
                                       description='For private repos and higher rate limits. Use read-only tokens: '
                                                   'GitHub fine-grained (Metadata, Issues, Pull requests, '
-                                                  'Actions: read) or GitLab read_api, with an expiry date.')
+                                                  'Actions: read), GitLab read_api or Forgejo/Gitea read:repository + read:issue, '
+                                                  'with an expiry date.')
         page.add(token_group)
         self.tokens, self.on_error, self.rows, self.initial = tokens, on_error, {}, {}
-        for host in dict.fromkeys(['github.com', 'gitlab.com', *map(repo_id.host_of, repos)]):
+        instances = Adw.EntryRow(title='Self-hosted Forgejo/Gitea hosts (comma separated, reopen to add a token)',
+                                 text=', '.join(settings.get_strv('forgejo-hosts')))
+        instances.connect('changed', lambda r: self._set_instances(settings, r.get_text()))
+        token_group.add(instances)
+        declared = settings.get_strv('forgejo-hosts')
+        for host in dict.fromkeys(['github.com', 'gitlab.com', 'codeberg.org', *declared, *map(repo_id.host_of, repos)]):
             row = Adw.PasswordEntryRow(title=host)
             self.initial[host] = tokens.get(host) or ''
             row.set_text(self.initial[host])
@@ -94,6 +100,12 @@ class Prefs(Adw.PreferencesDialog):
     def _toggle_kind(settings, kind, on):
         kept = [k for k in settings.get_strv('notify-kinds') if k != kind]
         settings.set_strv('notify-kinds', [*kept, kind] if on else kept)
+
+    @staticmethod
+    def _set_instances(settings, text):
+        hosts = [h for h in (x.strip().lower() for x in text.split(',')) if h]
+        settings.set_strv('forgejo-hosts', hosts)
+        repo_id.set_forgejo_hosts(hosts)
 
     @staticmethod
     def _toggle_virtual(settings, vid, on):
