@@ -1,4 +1,4 @@
-import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 
@@ -9,6 +9,7 @@ from .groups import Groups
 from .health import group_severity, severity
 from .motion import Slot
 from .prefs import Prefs
+from .status import RepoStatus
 from .sorting import sorted_order
 from .titles import TitleStore
 
@@ -24,7 +25,9 @@ class Window(Adw.ApplicationWindow):
         for key, prop in (('window-width', 'default-width'), ('window-height', 'default-height'),
                           ('window-maximized', 'maximized')):
             settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
-        self.cards, self.pages, self.timer, self.pending = {}, {}, 0, 0  # pending: fetches in flight
+        self.cards, self.pages, self.timer = {}, {}, 0
+        self.pending, self.inflight, self.marks_scheduled = 0, set(), 0
+        self.pool = ThreadPoolExecutor(max_workers=4)  # ponytail: fixed 4 workers, make it a setting if hosts rate-limit
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
         initial = settings.get_value('groups').unpack()
@@ -488,16 +491,23 @@ class Window(Adw.ApplicationWindow):
             host = repo_id.host_of(name)
             if host not in tokens:
                 tokens[host] = self.tokens.get(host)
+            if name in self.inflight:  # slow network: don't stack a second fetch on the same repo
+                continue
+            self.inflight.add(name)
             self.pending += 1
-            threading.Thread(target=self._worker, args=(name, tokens[host]), daemon=True).start()
+            self.pool.submit(self._worker, name, tokens[host])
         if self.pending:
             self.refresh_button.set_child(Adw.Spinner())
 
     def _worker(self, name, token):
-        data = self.service.fetch(name, token)
+        try:
+            data = self.service.fetch(name, token)
+        except Exception as e:  # the service already maps failures; this keeps in-flight bookkeeping from leaking
+            data = RepoStatus(name=name, error=str(e))
         GLib.idle_add(self._apply, name, data)
 
     def _apply(self, name, data):
+        self.inflight.discard(name)
         self.pending -= 1
         if not self.pending:  # last result in: stop the spinner, stamp the time
             self.refresh_button.set_icon_name('view-refresh-symbolic')
@@ -506,7 +516,13 @@ class Window(Adw.ApplicationWindow):
         if card:
             card.update(data)
             self._apply_sort(self.groups.group_of(name))
-            self._update_marks()
+            if not self.marks_scheduled:  # a burst of results walks the tab bar once, not once per repo
+                self.marks_scheduled = GLib.idle_add(self._flush_marks)
+
+    def _flush_marks(self):
+        self.marks_scheduled = 0
+        self._update_marks()
+        return GLib.SOURCE_REMOVE
 
     def show_prefs(self):
         Prefs(self.settings, self.tokens, self.cards,
