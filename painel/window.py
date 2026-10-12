@@ -42,7 +42,6 @@ class Window(Adw.ApplicationWindow):
         self.cards, self.pages, self.timers = {}, {}, []  # timers: one refresh source per group
         self.pending, self.inflight, self.marks_scheduled = 0, set(), 0
         self.group_marks, self.sidebar_marks = {}, {}  # group name -> [severity]; TabPage -> its sidebar marks box
-        self.tab_marks, self.tab_widgets = {}, {}  # TabPage -> marks box overlaid on the tab bar; TabPage -> its AdwTab
         self.pool = ThreadPoolExecutor(max_workers=4)  # ponytail: fixed 4 workers, make it a setting if hosts rate-limit
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
@@ -62,7 +61,7 @@ class Window(Adw.ApplicationWindow):
             for repo in self.groups.repos(group):
                 self._add_card(repo, group)
         self._apply_colors()
-        self._apply_layout()
+        self._sync_toggle()
         self._apply_view()
         self._apply_sort()
         self._update_actions()
@@ -73,7 +72,6 @@ class Window(Adw.ApplicationWindow):
         settings.connect('changed::sync-imported', lambda *_: self._sync_sources())
         GLib.timeout_add_seconds(5, lambda: self._sync_sources() or GLib.SOURCE_REMOVE)  # not on the startup path
         GLib.timeout_add_seconds(SYNC_SECONDS, lambda: self._sync_sources() or GLib.SOURCE_CONTINUE)
-        settings.connect('changed::layout', lambda *_: (self._apply_layout(), self._update_marks()))
         settings.connect('changed::view', lambda *_: self._apply_view())
         for key in ('colored-tabs', 'colored-icons'):
             settings.connect(f'changed::{key}', lambda *_: self._apply_colors())
@@ -101,23 +99,13 @@ class Window(Adw.ApplicationWindow):
 
         self.tab_view = Adw.TabView(vexpand=True)
         self.tab_view.connect('close-page', self._on_close_page)
-        self.tab_view.connect('page-reordered', lambda *_: (self.groups.set_group_order(self._tab_order()),
-                                                            GLib.idle_add(self._tint_tabs)))
-        self.tab_view.connect('page-attached', lambda *_: GLib.idle_add(self._tint_tabs))  # tab widgets appear after this
+        self.tab_view.connect('page-reordered', lambda *_: self.groups.set_group_order(self._tab_order()))
         self.tab_view.connect('notify::selected-page', lambda *_: (self._update_actions(), self.body.set_visible_child_name('groups')))  # picking a group drills into it
         group_menu = Gio.Menu()
         group_menu.append('Rename…', 'win.rename-group')
         group_menu.append('Settings…', 'win.group-settings')
         group_menu.append('Delete…', 'win.delete-group')
         self.group_menu = group_menu
-        self.tab_view.set_menu_model(group_menu)
-        self.tab_view.connect('setup-menu', lambda _v, page: page and self.tab_view.set_selected_page(page))
-        self.tab_bar = Adw.TabBar(view=self.tab_view, autohide=False)
-        new_tab = Gtk.Button(icon_name='tab-new-symbolic', tooltip_text='New group', css_classes=['flat'])
-        new_tab.connect('clicked', self.ask_new_group)
-        self.tab_bar.set_end_action_widget(new_tab)
-        self.tab_bar.setup_extra_drop_target(Gdk.DragAction.MOVE, [GObject.TYPE_VARIANT])
-        self.tab_bar.connect('extra-drag-drop', lambda _bar, page, ident: self._drop_on_page(page, ident.unpack()))
 
         # content pane: own header bar (title = current group), like Files
         self.window_title = Adw.WindowTitle(title='Painel', subtitle='')
@@ -151,16 +139,10 @@ class Window(Adw.ApplicationWindow):
         content_header.pack_start(refresh)
         content_header.pack_start(self.search_button)
         content_header.pack_start(self.search_revealer)
-        self.content_menu = Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu)  # tabs layout only
-        content_header.pack_end(self.content_menu)
         self.view_button = Gtk.MenuButton(icon_name='view-grid-symbolic', always_show_arrow=True,
                                           tooltip_text='View and sort', menu_model=self._build_view_menu())
         content_header.pack_end(self.view_button)
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        # AdwTab holds one icon at most, so the marks are real icons overlaid on the bar and kept on their tab
-        self.tab_overlay = Gtk.Overlay(child=self.tab_bar)
-        self.tab_bar.add_tick_callback(lambda *_: self._place_tab_marks() or GLib.SOURCE_CONTINUE)
-        content.append(self.tab_overlay)
         self.results = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=['boxed-list'], valign=Gtk.Align.START)
         self.results.set_placeholder(Adw.StatusPage(title='No Matches', icon_name='edit-find-symbolic',
                                                     description='No repository matches the search.'))
@@ -200,7 +182,7 @@ class Window(Adw.ApplicationWindow):
         self.split.connect('notify::collapsed', lambda *_: self._sync_toggle())
 
     def _build_view_menu(self):
-        for key in ('sort', 'sort-reverse', 'view', 'layout'):  # stateful actions backed by GSettings
+        for key in ('sort', 'sort-reverse', 'view'):  # stateful actions backed by GSettings
             self.add_action(self.settings.create_action(key))
         menu = Gio.Menu()
         sort = Gio.Menu()
@@ -214,10 +196,6 @@ class Window(Adw.ApplicationWindow):
                             ('Large cards', 'grid-large'), ('List', 'list')):
             view.append(label, f'win.view::{mode}')
         menu.append_section('View', view)
-        groups = Gio.Menu()
-        for label, mode in (('Sidebar', 'sidebar'), ('Tabs', 'tabs')):
-            groups.append(label, f'win.layout::{mode}')
-        menu.append_section('Groups', groups)
         return menu
 
     def _build_sidebar(self):
@@ -270,17 +248,11 @@ class Window(Adw.ApplicationWindow):
         popover.connect('closed', lambda p: GLib.idle_add(p.unparent))
         popover.popup()
 
-    def _apply_layout(self):
-        sidebar = self.settings.get_string('layout') == 'sidebar'
-        self.tab_overlay.set_visible(not sidebar)
-        self.content_menu.set_visible(not sidebar)  # the sidebar header carries the menu otherwise
-        self._sync_toggle()
-
     def _sync_toggle(self):
-        """Sidebar layout: pinned when wide, closed overlay behind a toggle when collapsed. Tabs layout: none."""
-        sidebar, collapsed = self.settings.get_string('layout') == 'sidebar', self.split.get_collapsed()
-        self.sidebar_toggle.set_visible(sidebar and collapsed)
-        self.split.set_show_sidebar(sidebar and not collapsed)
+        """Pinned sidebar when wide, closed overlay behind a header toggle when collapsed."""
+        collapsed = self.split.get_collapsed()
+        self.sidebar_toggle.set_visible(collapsed)
+        self.split.set_show_sidebar(not collapsed)
 
     # --- view and sort (live: re-sorted whenever a refresh brings new numbers) ---
     def _apply_colors(self):
@@ -406,44 +378,8 @@ class Window(Adw.ApplicationWindow):
             tab = self.tab_view.get_page(page)
             tab.set_keyword(sev)  # carries the severity: sidebar rows follow its notify
             tab.set_tooltip(', '.join(_MARKS[m][1] for m in marks))
-            if tab not in self.tab_marks:
-                box = Gtk.Box(spacing=4, halign=Gtk.Align.START, valign=Gtk.Align.CENTER, can_target=False)
-                self.tab_overlay.add_overlay(box)
-                self.tab_marks[tab] = box
-            self._fill_marks(self.tab_marks[tab], marks)
             if (box := self.sidebar_marks.get(tab)):
                 self._fill_marks(box, marks)
-        for tab in [t for t in self.tab_marks if t.get_child() is None or t.get_child().name not in self.pages]:
-            self.tab_overlay.remove_overlay(self.tab_marks.pop(tab))
-        self._tint_tabs()
-
-    def _place_tab_marks(self):
-        """Per frame while the tab bar is shown: park each marks box at the start of its tab (hidden if scrolled out)."""
-        width = self.tab_overlay.get_width()
-        for tab, box in self.tab_marks.items():
-            ok, bounds = self.tab_widgets[tab].compute_bounds(self.tab_overlay) if tab in self.tab_widgets else (False, None)
-            x = int(bounds.get_x()) + 8 if ok else 0
-            visible = ok and x >= 0 and x + box.get_width() <= width and bool(box.get_first_child())
-            if box.get_visible() != visible:
-                box.set_visible(visible)
-            if visible and box.get_margin_start() != x:
-                box.set_margin_start(x)
-
-    def _tint_tabs(self):
-        """AdwTabBar has no per-tab API, so find its internal `tab` widgets and tag them by page."""
-        def walk(widget):
-            yield widget
-            child = widget.get_first_child()
-            while child:
-                yield from walk(child)
-                child = child.get_next_sibling()
-
-        for widget in walk(self.tab_bar):
-            if widget.get_css_name() == 'tab' and widget.find_property('page'):
-                page = widget.get_property('page')
-                if page:
-                    self.tab_widgets[page] = widget
-                    self._set_tint(widget, page.get_keyword())
 
     # --- groups ---
     def _tab_order(self):
