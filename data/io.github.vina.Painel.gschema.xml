@@ -10,6 +10,7 @@
     <key name="sync-imported" type="b"><default>false</default><summary>Add new repositories of imported accounts automatically</summary></key>
     <key name="sync-asked" type="b"><default>false</default><summary>The first-import sync question was answered</summary></key>
     <key name="group-intervals" type="a{si}"><default>{}</default><summary>Refresh interval in seconds per group (absent = global)</summary></key>
+    <key name="forgejo-hosts" type="as"><default>[]</default><summary>Self-hosted Forgejo/Gitea instances (codeberg.org is built in)</summary></key>
     <key name="virtual-disabled" type="as"><default>[]</default><summary>Virtual groups switched off (absent = shown when they have repositories)</summary></key>
     <key name="group-icons" type="a{ss}"><default>{}</default><summary>Icon name per group (absent = folder)</summary></key>
     <key name="notify-ci" type="b"><default>true</default><summary>Send desktop notifications when a repository's CI state changes</summary></key>

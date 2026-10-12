@@ -11,7 +11,7 @@ class IconPicker(Gtk.FlowBox):
                          max_children_per_line=10, row_spacing=4, column_spacing=4)
         self.selected, first = selected, None
         for name in CHOICES:
-            button = Gtk.ToggleButton(icon_name=name, tooltip_text=name.removesuffix('-symbolic').replace('-', ' '),
+            button = Gtk.ToggleButton(icon_name=name, tooltip_text=name.removeprefix('painel-').removesuffix('-symbolic').replace('-', ' '),
                                       css_classes=['flat'], active=name == selected)
             button.update_property([Gtk.AccessibleProperty.LABEL], [button.get_tooltip_text()])
             if first:

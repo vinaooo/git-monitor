@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Git Monitor
-Comment=Monitor GitHub and GitLab repositories
-Keywords=github;gitlab;ci;issues;pull requests;merge requests;
+Comment=Monitor GitHub, GitLab and Forgejo/Gitea repositories
+Keywords=github;gitlab;forgejo;gitea;codeberg;ci;issues;pull requests;merge requests;
 Exec=painel
 Icon=io.github.vina.Painel
 Terminal=false

@@ -16,6 +16,9 @@ class VirtualTest(unittest.TestCase):
         self.assertFalse(BY_ID['github'].match('gitlab.com/g/p', None))
         self.assertTrue(BY_ID['gitlab'].match('gitlab.com/g/p', None))
         self.assertTrue(BY_ID['gitlab'].match('gitlab.example.org/g/p', None))
+        self.assertTrue(BY_ID['forgejo'].match('codeberg.org/o/r', None))
+        self.assertFalse(BY_ID['forgejo'].match('gitlab.com/g/p', None))
+        self.assertFalse(BY_ID['gitlab'].match('codeberg.org/o/r', None))
 
     def test_status_groups_need_a_status(self):
         for vid in ('ready', 'cancelled', 'ci-failing', 'attention', 'waiting', 'errors'):
@@ -44,3 +47,10 @@ class VirtualTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CategoriesTest(unittest.TestCase):
+    def test_every_definition_in_exactly_one_category(self):
+        from painel.virtual import CATEGORIES, DEFINITIONS
+        ids = [i for _c, _t, group in CATEGORIES for i in group]
+        self.assertEqual(sorted(ids), sorted(d.id for d in DEFINITIONS))

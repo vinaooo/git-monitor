@@ -54,6 +54,12 @@ class SecretHygieneTest(unittest.TestCase):
             s = StatusService(FakeHttp(error=err)).fetch('github.com/o/r', 's3cret-token')
             self.assertNotIn('s3cret-token', s.error)
 
+    def test_forgejo_uses_https_and_own_host(self):
+        http = FakeHttp(error=HttpError(404))
+        s = StatusService(http).fetch('codeberg.org/a/b', 'tok')
+        self.assertTrue(all(u.startswith('https://codeberg.org/api/v1/') for u in http.urls))
+        self.assertEqual((s.error, StatusService.batch_size('codeberg.org', 'tok')), ('Not found (private? add a token)', 0))
+
     def test_gitlab_uses_https_and_own_host(self):
         http = FakeHttp(error=HttpError(404))
         StatusService(http).fetch('gitlab.example.org/a/b', 'tok')

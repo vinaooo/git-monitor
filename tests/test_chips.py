@@ -63,6 +63,11 @@ class ChipLinkTest(unittest.TestCase):
         self.assertEqual(self.link(self.GH, 'conflict'), f'{self.GH}/pulls?q=is%3Apr+is%3Aopen')  # no qualifier exists
         self.assertEqual(self.link(self.GH, 'open'), f'{self.GH}/pulls?q=is%3Apr+is%3Aopen')
 
+    def test_forgejo_list(self):
+        base = 'https://codeberg.org/o/r'
+        for bucket in ('draft', 'conflict', 'open'):
+            self.assertEqual(self.link(base, bucket), f'{base}/pulls?state=open')
+
     def test_gitlab_filters(self):
         self.assertEqual(self.link(self.GL, 'draft'), f'{self.GL}/-/merge_requests?state=opened&draft=yes')
         self.assertEqual(self.link(self.GL, 'approved'), f'{self.GL}/-/merge_requests?state=opened&draft=no')
