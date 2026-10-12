@@ -7,9 +7,10 @@ class IntervalRows:
     """"Custom refresh interval" switch + seconds spin, with the GitHub rate-limit warning and a suggestion.
     Shared by the group settings and the import dialog. `value()` is the chosen seconds, None = follow the default."""
 
-    def __init__(self, default, current=None, github_repos=0, has_token=False, others=(), ratio=0.0):
+    def __init__(self, default, current=None, github_repos=0, has_token=False, others=(), ratio=0.0, signals=()):
         """`others`: (github_repos, interval) of the other groups that refresh alongside this one."""
         self.default, self.github_repos, self.has_token, self.others = default, github_repos, has_token, list(others)
+        self.signals = signals  # enabled optional card signals: they add API calls
         self.ratio = ratio  # share of requests answered by 304 (free on GitHub), measured by the HTTP client
         self.switch = Adw.SwitchRow(title='Custom refresh interval', subtitle='Instead of the interval in Preferences.',
                                     active=current is not None)
@@ -37,7 +38,7 @@ class IntervalRows:
     def suggest(self):
         """Switch to the shortest interval that fits the rate limit, if the current one does not."""
         if self._warn():
-            self.spin.set_value(rate_limit.min_interval(self.github_repos, self.has_token, self.ratio))
+            self.spin.set_value(rate_limit.min_interval(self.github_repos, self.has_token, self.ratio, self.signals))
             self.switch.set_active(True)
 
     def _interval(self):
@@ -45,16 +46,16 @@ class IntervalRows:
 
     def _warn(self):
         load = rate_limit.github_load
-        mine = load([(self.github_repos, self._interval())], self.has_token, self.ratio)
-        total = mine + load(self.others, self.has_token, self.ratio)
+        mine = load([(self.github_repos, self._interval())], self.has_token, self.ratio, self.signals)
+        total = mine + load(self.others, self.has_token, self.ratio, self.signals)
         limit = rate_limit.LIMITS[self.has_token]
         over = total > limit
-        worst_mine = load([(self.github_repos, self._interval())], self.has_token)
+        worst_mine = load([(self.github_repos, self._interval())], self.has_token, 0.0, self.signals)
         text = f'This group {rate_limit.usage_text(mine, self.has_token, worst_mine)}'
         if self.others:
-            text += f'\nAll groups {rate_limit.usage_text(total, self.has_token, worst_mine + load(self.others, self.has_token))}'
+            text += f'\nAll groups {rate_limit.usage_text(total, self.has_token, worst_mine + load(self.others, self.has_token, 0.0, self.signals))}'
         if over:
-            text += f'\nSuggested: {rate_limit.min_interval(self.github_repos, self.has_token, self.ratio)} s.'
+            text += f'\nSuggested: {rate_limit.min_interval(self.github_repos, self.has_token, self.ratio, self.signals)} s.'
         self.usage.set_subtitle(text)
         (self.usage.add_css_class if total >= 0.8 * limit else self.usage.remove_css_class)('warning')  # amber from 80%
         return over

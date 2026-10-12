@@ -2,6 +2,7 @@ from gi.repository import Adw, Gtk
 
 from . import repo_id
 from .tokens import TokenStoreError
+from .signals import SIGNALS, enabled
 from .rate_limit import LIMITS, github_load, usage_text
 from .notify import KINDS
 from .virtual import DEFINITIONS
@@ -49,6 +50,16 @@ class Prefs(Adw.PreferencesDialog):
             master.bind_property('active', row, 'sensitive', 2)  # SYNC_CREATE
             notes.add(row)
 
+        cards = Adw.PreferencesGroup(title='Card signals', description='Extra chips on GitHub cards. Each one you leave off '
+                                     'costs no API requests. Some need token permissions (see the README).')
+        page.add(cards)
+        for ident, title, subtitle in SIGNALS:
+            row = Adw.SwitchRow(title=title, subtitle=subtitle)
+            settings.bind(f'signal-{ident}', row, 'active', 0)
+            row.connect('notify::active', lambda *_: self._update_warning())
+            cards.add(row)
+        self.settings = settings
+
         background = Adw.PreferencesGroup(title='Background')
         page.add(background)
         row = Adw.SwitchRow(title='Run in background', subtitle='Keep checking and notifying when the window is closed, '
@@ -76,7 +87,7 @@ class Prefs(Adw.PreferencesDialog):
         token_group = Adw.PreferencesGroup(title='Access tokens (optional)',
                                       description='For private repos and higher rate limits. Use read-only tokens: '
                                                   'GitHub fine-grained (Metadata, Issues, Pull requests, '
-                                                  'Actions: read), GitLab read_api or Forgejo/Gitea read:repository + read:issue, '
+                                                  'Actions: read; optional signals: Dependabot alerts, Code scanning alerts, Contents: read), GitLab read_api or Forgejo/Gitea read:repository + read:issue, '
                                                   'with an expiry date.')
         page.add(token_group)
         self.tokens, self.on_error, self.rows, self.initial = tokens, on_error, {}, {}
@@ -128,8 +139,9 @@ class Prefs(Adw.PreferencesDialog):
         load = [(sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups[n]), self.custom.get(n, default))
                 for n in names]
         has_token = bool(self.rows[repo_id.GITHUB_HOST].get_text().strip())
-        per_hour = github_load(load, has_token, self.ratio)
+        signals = enabled(self.settings)
+        per_hour = github_load(load, has_token, self.ratio, signals)
         over = per_hour > LIMITS[has_token]
-        self.interval.set_subtitle(usage_text(per_hour, has_token, github_load(load, has_token))
+        self.interval.set_subtitle(usage_text(per_hour, has_token, github_load(load, has_token, 0.0, signals))
                                    + (' Add a token to raise it.' if over and not has_token else ''))
         (self.interval.add_css_class if over else self.interval.remove_css_class)('warning')
