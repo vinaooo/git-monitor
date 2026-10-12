@@ -5,12 +5,15 @@ from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 from . import repo_id
 from .card import Card
 from .group_page import GroupPage
+from . import importer
 from .groups import Groups
 from .health import group_severity, severity
+from .import_dialog import ImportDialog
 from .motion import Slot
 from .prefs import Prefs
 from .status import RepoStatus
 from .sorting import sorted_order
+from .sources import SourceStore
 from .titles import TitleStore
 
 # group marks, worst first: severity -> (icon, tooltip). A group shows one icon per kind present, side by side, in the
@@ -35,6 +38,8 @@ class Window(Adw.ApplicationWindow):
         self.pool = ThreadPoolExecutor(max_workers=4)  # ponytail: fixed 4 workers, make it a setting if hosts rate-limit
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
+        self.sources = SourceStore(settings.get_value('sources').unpack(),
+                                   lambda s: settings.set_value('sources', GLib.Variant('a(sssasas)', s)))
         initial = settings.get_value('groups').unpack()
         self.groups = Groups(initial, lambda g: settings.set_value('groups', GLib.Variant('a(sas)', g)),
                              legacy_repos=[repo_id.migrate(r) for r in settings.get_strv('repos')])
@@ -66,14 +71,15 @@ class Window(Adw.ApplicationWindow):
     # --- ui construction ---
     def _build_ui(self, app):
         menu, section = Gio.Menu(), Gio.Menu()
-        for label, action in (('New group…', 'new-group'), ('Rename group…', 'rename-group'),
-                              ('Delete group…', 'delete-group')):
+        for label, action in (('New group…', 'new-group'), ('Import from account…', 'import-account'),
+                              ('Rename group…', 'rename-group'), ('Delete group…', 'delete-group')):
             section.append(label, f'win.{action}')
         menu.append_section(None, section)
         for i in range(app.menu.get_n_items()):  # flatten: a section of sections loses its separators
             menu.append_section(None, app.menu.get_item_link(i, Gio.MENU_LINK_SECTION))
         self.actions = {}
-        for name, cb in (('new-group', self.ask_new_group), ('rename-group', self.ask_rename_group),
+        for name, cb in (('new-group', self.ask_new_group), ('import-account', self.ask_import),
+                         ('rename-group', self.ask_rename_group),
                          ('delete-group', lambda *_: self.tab_view.close_page(self.tab_view.get_selected_page()))):
             act = Gio.SimpleAction.new(name, None)
             act.connect('activate', cb)
@@ -387,6 +393,7 @@ class Window(Adw.ApplicationWindow):
             if new != old:
                 self.toasts.add_toast(Adw.Toast(title='Invalid or duplicate group name'))
             return
+        self.sources.rename_group(old, new)
         page = self.pages.pop(old)
         page.name = new
         self.pages[new] = page
@@ -416,6 +423,7 @@ class Window(Adw.ApplicationWindow):
         for repo in self.groups.repos(name):
             self._drop_repo(repo)  # the whole group was confirmed: no per-repo undo
         self.groups.remove(name)
+        self.sources.remove_group(name)
         self.pages.pop(name)
         self.tab_view.close_page_finish(tab_page, True)
 
@@ -427,6 +435,45 @@ class Window(Adw.ApplicationWindow):
         self.cards[ident] = card
         self.pages[group].add_slot(ident, Slot(card))
         self._apply_sort(group)
+
+    # --- import from an account ---
+    def ask_import(self, *_):
+        ImportDialog(self.settings, self.tokens, self.service, self.pool.submit, self.groups.all_repos,
+                     self._confirm_import).present(self)
+
+    def _confirm_import(self, host, account, new, kinds, listed):
+        if self.settings.get_boolean('sync-asked'):
+            self.import_account(host, account, new, kinds, listed)
+            return
+        dlg = Adw.AlertDialog(heading='Keep this group in sync?',
+                              body='Painel can add repositories this account creates later. You can change this in Preferences.')
+        dlg.add_response('no', 'Not now')
+        dlg.add_response('yes', 'Keep in sync')
+        dlg.set_response_appearance('yes', Adw.ResponseAppearance.SUGGESTED)
+        dlg.set_default_response('yes')
+
+        def answered(_dlg, response):
+            self.settings.set_boolean('sync-imported', response == 'yes')
+            self.settings.set_boolean('sync-asked', True)
+            self.import_account(host, account, new, kinds, listed)
+
+        dlg.connect('response', answered)
+        dlg.present(self)
+
+    def import_account(self, host, account, new, kinds, listed):
+        wanted = importer.group_name(account)
+        group = next((g for g in self.groups.names() if g.lower() == wanted.lower()), None)  # re-import adds to it
+        if group:
+            self.tab_view.set_selected_page(self._tab_page(group))
+        else:
+            self.new_group(wanted)
+            group = wanted
+        for ident in new:
+            self.groups.add_repo(group, ident)
+            self._add_card(ident, group)
+        self.sources.add(group, host, account, kinds, listed)
+        self.refresh()
+        self.toasts.add_toast(Adw.Toast(title=f'Imported {len(new)} repositories into {group}'))
 
     def ask_repo(self, *_):
         entry = Gtk.Entry(placeholder_text='GitHub/GitLab URL or owner/name', activates_default=True)
