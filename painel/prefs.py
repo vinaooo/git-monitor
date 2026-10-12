@@ -27,7 +27,7 @@ class Prefs(Adw.PreferencesDialog):
 
         look = Adw.PreferencesGroup(title='Group health marks')
         page.add(look)
-        for key, title, subtitle in (('colored-tabs', 'Colored tabs', 'Tint tabs and sidebar rows by group health.'),
+        for key, title, subtitle in (('colored-tabs', 'Colored group rows', 'Tint sidebar rows by group health.'),
                                      ('colored-icons', 'Colored icons', 'Color the health icons shown on each group.')):
             row = Adw.SwitchRow(title=title, subtitle=subtitle)
             settings.bind(key, row, 'active', 0)
