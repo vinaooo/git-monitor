@@ -91,3 +91,22 @@ class NotModifiedTest(unittest.TestCase):
     def test_usage_text_shows_worst_case_when_it_differs(self):
         self.assertEqual(usage_text(30, False, worst=120), '~30 of 60 requests/hour (50%), worst case ~120')
         self.assertEqual(usage_text(30, False, worst=30), '~30 of 60 requests/hour (50%)')
+
+
+class SignalCostTest(unittest.TestCase):
+    def test_signals_raise_the_estimate_only_where_they_cost(self):
+        from painel.rate_limit import calls_per_repo
+        base = calls_per_repo(True)
+        self.assertEqual(calls_per_repo(True, 0.0, frozenset({'push', 'release'})), base)
+        self.assertAlmostEqual(calls_per_repo(True, 0.0, frozenset({'security', 'reviews'})), base + 1 + 0.1 + 0.5)
+        self.assertEqual(calls_per_repo(False, 0.0, frozenset({'security', 'reviews'})), calls_per_repo(False))
+        self.assertEqual(calls_per_repo(False, 0.0, frozenset({'release'})), calls_per_repo(False) + 1)
+
+    def test_304s_only_discount_the_conditional_part(self):
+        from painel.rate_limit import calls_per_repo
+        self.assertAlmostEqual(calls_per_repo(True, 1.0, frozenset({'security'})), 1 + 0.1)
+
+    def test_signals_reach_the_load_and_interval(self):
+        s = frozenset({'security'})
+        self.assertGreater(github_load([(10, 60)], True, 0.0, s), github_load([(10, 60)], True))
+        self.assertGreater(min_interval(1000, True, 0.0, s), min_interval(1000, True))

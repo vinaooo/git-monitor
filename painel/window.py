@@ -1,3 +1,4 @@
+import dataclasses
 import os
 from concurrent.futures import ThreadPoolExecutor
 
@@ -27,6 +28,7 @@ from .sorting import sorted_order
 from .virtual import CATEGORIES, DEFINITIONS, members, shown
 from .sources import SourceStore
 from .titles import TitleStore
+from . import local
 
 # group marks, worst first: severity -> (icon, tooltip). A group shows one icon per kind present, side by side, in the
 # sidebar row and over its tab; shapes differ so state never rests on colour alone. "success" = ready to merge / all green.
@@ -47,6 +49,7 @@ class Window(Adw.ApplicationWindow):
             settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
         self.connect('close-request', self._on_close_request)
         self.query, self.results_scheduled = '', 0
+        self.review_sets = {}  # host -> lowercase repo paths with a PR/MR asking for my review
         self.vpages, self.mirrors, self.virtual_active, self.virtual_scheduled = {}, {}, False, 0  # virtual groups
         self.cards, self.pages, self.timers = {}, {}, {}  # timers: group -> its refresh source
         self.fast, self.paces, self.slow, self.last = {}, {}, {}, {}  # group -> fast-lane source / Pace / delay; repo -> last RepoStatus
@@ -55,6 +58,10 @@ class Window(Adw.ApplicationWindow):
         self.pool = ThreadPoolExecutor(max_workers=4)  # ponytail: fixed 4 workers, make it a setting if hosts rate-limit
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
+        self.clones = TitleStore(settings.get_value('clones').unpack(),  # repo -> clone folder (a document-portal path in Flatpak)
+                                 lambda d: settings.set_value('clones', GLib.Variant('a{ss}', d)))
+        self.local_at = {}  # repo -> monotonic time of its last local check
+        settings.connect('changed::signal-local', lambda *_: self._local_toggled())
         self.sources = SourceStore(settings.get_value('sources').unpack(),
                                    lambda s: settings.set_value('sources', GLib.Variant('a(sssasas)', s)))
         self.icons = IconStore(settings.get_value('group-icons').unpack(),
@@ -181,6 +188,10 @@ class Window(Adw.ApplicationWindow):
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.real_list = self._build_sidebar()
         sidebar.append(Gtk.ScrolledWindow(child=self.real_list, vexpand=True))
+        new_group = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='New group', halign=Gtk.Align.END,
+                               margin_top=6, margin_bottom=6, margin_end=6, css_classes=['flat'])
+        new_group.connect('clicked', self.ask_new_group)
+        sidebar.append(new_group)
         self.virtual_box = self._build_virtual_sidebar()
         # virtual groups sit at the bottom of the sidebar, under a separator
         self.virtual_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, visible=False)
@@ -188,10 +199,6 @@ class Window(Adw.ApplicationWindow):
         self.virtual_section.append(Gtk.ScrolledWindow(child=self.virtual_box, propagate_natural_height=True,
                                                        max_content_height=520, hscrollbar_policy=Gtk.PolicyType.NEVER))
         sidebar.append(self.virtual_section)
-        new_group = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='New group', halign=Gtk.Align.END,
-                               margin_top=6, margin_bottom=6, margin_end=6, css_classes=['flat'])
-        new_group.connect('clicked', self.ask_new_group)
-        sidebar.append(new_group)
         sidebar_view = Adw.ToolbarView(content=sidebar)
         sidebar_view.add_top_bar(sidebar_header)
 
@@ -378,7 +385,7 @@ class Window(Adw.ApplicationWindow):
 
     # --- search (all groups; the tab / sidebar title carries the match count) ---
     def _refilter(self, group=None):
-        pred = self.query.strip() and (lambda c: matches(self.query, c.ident, c.title.get_label(), c.status))
+        pred = self.query.strip() and (lambda c: matches(self.query, c.ident, c.title.get_label(), c.status, c.local))
         for name in [group] if group else list(self.pages):
             page = self.pages[name]
             page.set_filter(pred or None)
@@ -411,12 +418,12 @@ class Window(Adw.ApplicationWindow):
         for group in self.pages:
             for ident in self.groups.repos(group):
                 card = self.cards.get(ident)
-                if not card or not matches(self.query, card.ident, card.title.get_label(), card.status):
+                if not card or not matches(self.query, card.ident, card.title.get_label(), card.status, card.local):
                     continue
                 row = Adw.ActionRow(title=GLib.markup_escape_text(card.title.get_label()), activatable=True,
                                     subtitle=GLib.markup_escape_text(f'{group} · {ident}'))
                 row.group, row.ident = group, ident
-                words = [c.text for _g, chips in chips_for(card.status) for c in chips]
+                words = [c.text for _g, chips in chips_for(card.status) + [('', local.chips(card.local))] for c in chips]
                 row.add_suffix(Gtk.Label(label=' · '.join(words), css_classes=['dim-label'], wrap=True, xalign=1,
                                          max_width_chars=34))
                 self.results.append(row)
@@ -542,16 +549,34 @@ class Window(Adw.ApplicationWindow):
 
     def _make_mirror(self, ident, page):
         card = Card(ident, self.remove_repo, self.rename_repo, lambda *_: None, lambda *_: None, self.titles.get(ident),
-                    other_groups=self.other_groups, on_move=self.move_to_group, can_drag=lambda: False)
+                    other_groups=self.other_groups, on_move=self.move_to_group, can_drag=lambda: False,
+                    **self._clone_args())
         if self.cards[ident].status:
             card.update(self.cards[ident].status)
+        card.set_local(self.cards[ident].local)
         page.add_slot(ident, Slot(card))
         return card
+
+    def _flagged(self, ident, status):
+        """`status` with review_requested set from the last per-host search (None stays None: not fetched yet)."""
+        host, _, path = ident.partition('/')
+        if status is None or path.lower() not in self.review_sets.get(host, ()):
+            return status
+        return dataclasses.replace(status, review_requested=True)
+
+    def _reviews(self, host, token):
+        found = self.service.review_requests(host, token)
+        GLib.idle_add(self._set_reviews, host, found)
+
+    def _set_reviews(self, host, found):
+        if found != self.review_sets.get(host, set()):
+            self.review_sets[host] = found
+            self._schedule_virtual()
 
     def _sync_virtual(self):
         self.virtual_scheduled = 0
         disabled = set(self.settings.get_strv('virtual-disabled'))
-        items = [(i, self.cards[i].status) for g in self.groups.names() for i in self.groups.repos(g) if i in self.cards]
+        items = [(i, self._flagged(i, self.cards[i].status)) for g in self.groups.names() for i in self.groups.repos(g) if i in self.cards]
         by_id = {d.id: members(d, items) for d in DEFINITIONS}
         show = shown(disabled, by_id)
         mode, reverse = self.settings.get_string('sort'), self.settings.get_boolean('sort-reverse')
@@ -674,7 +699,7 @@ class Window(Adw.ApplicationWindow):
     def _add_card(self, ident, group):
         card = Card(ident, self.remove_repo, self.rename_repo, self.drag_started, self.drag_finished,
                     self.titles.get(ident), other_groups=self.other_groups, on_move=self.move_to_group,
-                    can_drag=lambda: self.settings.get_string('sort') == 'manual' and not self.query)
+                    can_drag=lambda: self.settings.get_string('sort') == 'manual' and not self.query, **self._clone_args())
         self.cards[ident] = card
         self.pages[group].add_slot(ident, Slot(card))
         self._apply_sort(group)
@@ -693,7 +718,7 @@ class Window(Adw.ApplicationWindow):
         github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups.repos(group))
         rows = IntervalRows(self.settings.get_int('refresh-seconds'), current, github,
                             bool(self.tokens.get(repo_id.GITHUB_HOST)), self._others_load(exclude=group),
-                            self.service.not_modified_ratio())
+                            self.service.not_modified_ratio(), self.service.signals())
         src = next((x for x in self.sources.all() if x[0] == group), None)
         GroupSettingsDialog(group, rows, current, lambda seconds: (self.intervals.set(group, seconds),
                                                                    self.restart_timers()),
@@ -798,7 +823,24 @@ class Window(Adw.ApplicationWindow):
 
     def ask_repo(self, *_):
         entry = Gtk.Entry(placeholder_text='GitHub/GitLab/Forgejo URL or owner/name', activates_default=True)
-        dlg = Adw.AlertDialog(heading='Add repository', extra_child=entry)
+        clone = {'path': None}  # optional local clone, linked after the card exists
+        content = Adw.ButtonContent(icon_name='folder-open-symbolic', label='Choose local clone folder…')
+        pick = Gtk.Button(child=content, tooltip_text='Optional: show its branch and changes on the card')
+
+        def chosen(dialog, res):
+            try:
+                clone['path'] = dialog.select_folder_finish(res).get_path()
+            except GLib.Error:  # dismissed
+                return
+            content.set_label(os.path.basename(clone['path']))
+            content.set_icon_name('object-select-symbolic')
+
+        pick.connect('clicked', lambda *_: Gtk.FileDialog(title='Choose the local clone', modal=True)
+                     .select_folder(self, None, chosen))
+        form = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        form.append(entry)
+        form.append(pick)
+        dlg = Adw.AlertDialog(heading='Add repository', extra_child=form)
         dlg.add_response('cancel', 'Cancel')
         dlg.add_response('add', 'Add')
         dlg.set_response_appearance('add', Adw.ResponseAppearance.SUGGESTED)
@@ -812,10 +854,10 @@ class Window(Adw.ApplicationWindow):
             (entry.remove_css_class if ok or not text.strip() else entry.add_css_class)('error')
 
         entry.connect('changed', validate)
-        dlg.connect('response', lambda d, r: r == 'add' and self.add_repo(entry.get_text()))
+        dlg.connect('response', lambda d, r: r == 'add' and self.add_repo(entry.get_text(), clone['path']))
         dlg.present(self)
 
-    def add_repo(self, text):
+    def add_repo(self, text, clone=None):
         name = repo_id.parse(text)
         if not name:
             self.toasts.add_toast(Adw.Toast(title='Invalid repository'))
@@ -826,6 +868,8 @@ class Window(Adw.ApplicationWindow):
         group = self._selected_group()
         self.groups.add_repo(group, name)
         self._add_card(name, group)
+        if clone:
+            self._offer_clone(name, clone)
         self.refresh()
 
     def rename_repo(self, name, title):
@@ -856,6 +900,8 @@ class Window(Adw.ApplicationWindow):
 
     def _drop_repo(self, name):
         self.titles.remove(name)
+        self.clones.remove(name)
+        self.local_at.pop(name, None)
         self.ci_state.forget(name)
         self.cards.pop(name)
         self.pages[self.groups.group_of(name)].remove_slot(name)
@@ -985,6 +1031,10 @@ class Window(Adw.ApplicationWindow):
         self._submit(names, track=True)
 
     def _submit(self, names, track):
+        self._refresh_local(names)
+        self._submit_remote(names, track)
+
+    def _submit_remote(self, names, track):
         """Queue a fetch for each of `names`. Skips repos still in flight and hosts that asked us to back off.
         GitHub repos with a token go in batched GraphQL queries. `track`: this is a group's pass (feeds its Pace)."""
         tokens, waits, batches, started = {}, {}, {}, {}
@@ -992,6 +1042,10 @@ class Window(Adw.ApplicationWindow):
             host = repo_id.host_of(name)
             if host not in tokens:
                 tokens[host], waits[host] = self.tokens.get(host), self.service.wait(host)
+                if tokens[host] and not waits[host] and repo_id.kind(host) in ('github', 'gitlab'):
+                    self.pool.submit(self._reviews, host, tokens[host])  # one search per host and pass
+                elif not tokens[host] and self.review_sets.get(host):
+                    self._set_reviews(host, set())  # token removed: the group empties
             if waits[host] > 0:
                 until = GLib.DateTime.new_now_local().add_seconds(waits[host]).format('%H:%M')
                 self.window_title.set_subtitle(f'{host} asked us to wait, resuming {until}')
@@ -1016,6 +1070,83 @@ class Window(Adw.ApplicationWindow):
                     self.paces[group].begin(count)
         if self.pending:
             self.refresh_button.set_child(Gtk.Spinner(spinning=True))
+
+    # --- linked local clones (local.py): no filesystem or subprocess work at all while 'signal-local' is off ---
+    LOCAL_EVERY = 60  # seconds between checks of one clone
+
+    def _clone_args(self):
+        return dict(on_link=self.link_clone, on_unlink=self.unlink_clone, linked=lambda i: self.clones.get(i) is not None,
+                    offer=lambda: self.settings.get_boolean('signal-local'))
+
+    def _refresh_local(self, names, force=False):
+        if not self.settings.get_boolean('signal-local'):
+            return
+        now = GLib.get_monotonic_time() / 1e6
+        for name in names:
+            folder = self.clones.get(name)
+            if folder and (force or now - self.local_at.get(name, -1e9) >= self.LOCAL_EVERY):
+                self.local_at[name] = now
+                self.pool.submit(self._local_worker, name, folder)
+
+    def _local_worker(self, name, folder):
+        GLib.idle_add(self._apply_local, name, local.inspect(folder))
+
+    def _apply_local(self, name, state):
+        card = self.cards.get(name)
+        if card and self.clones.get(name) and self.settings.get_boolean('signal-local'):
+            card.set_local(state)
+            for mirrors in self.mirrors.values():
+                if name in mirrors:
+                    mirrors[name].set_local(state)
+            if self.query:
+                self._refilter()
+
+    def _local_toggled(self):
+        on = self.settings.get_boolean('signal-local')
+        for card in list(self.cards.values()) + [m for ms in self.mirrors.values() for m in ms.values()]:
+            if not on or not self.clones.get(card.ident):
+                card.set_local(None)  # off: drop the chips; on: unlinked cards show the "link" chip
+        if on:
+            self._refresh_local(list(self.cards), force=True)
+
+    def link_clone(self, ident):
+        dialog = Gtk.FileDialog(title='Choose the local clone', modal=True)  # portal: only this folder is shared
+        dialog.select_folder(self, None, lambda d, res: self._clone_chosen(ident, d, res))
+
+    def _clone_chosen(self, ident, dialog, res):
+        try:
+            path = dialog.select_folder_finish(res).get_path()
+        except GLib.Error:  # dismissed
+            return
+        self._offer_clone(ident, path)
+
+    def _offer_clone(self, ident, path):
+        url = local.origin_url(path)
+        if url and not local.origin_matches(url, ident):
+            alert = Adw.AlertDialog(heading='Different repository?', body="This folder's origin does not look like "
+                                    f'{ident}. Link it anyway?')
+            alert.add_response('cancel', 'Cancel')
+            alert.add_response('link', 'Link anyway')
+            alert.choose(self, None, lambda a, r: self._set_clone(ident, path) if a.choose_finish(r) == 'link' else None)
+        else:
+            self._set_clone(ident, path)
+
+    def _set_clone(self, ident, path):
+        self.clones.set(ident, path)
+        if not self.settings.get_boolean('signal-local'):
+            self.settings.set_boolean('signal-local', True)  # linking implies wanting it; the toggle refreshes
+        else:
+            self._refresh_local([ident], force=True)
+
+    def unlink_clone(self, ident):
+        self.clones.remove(ident)
+        self.local_at.pop(ident, None)
+        self._apply_local_clear(ident)
+
+    def _apply_local_clear(self, ident):
+        for card in [self.cards.get(ident)] + [m[ident] for m in self.mirrors.values() if ident in m]:
+            if card:
+                card.set_local(None)
 
     def _batch(self, names, token):
         """One request for the repo + PR data of `names`; each repo then fetches its CI in parallel on the pool."""

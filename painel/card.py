@@ -1,22 +1,27 @@
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
+from . import local
 from .chips import Chip, chips_for
 from .health import severity
 
 TEXT_CHARS = 26
+LINK = 'painel:link-clone'  # Chip.url marker: the chip is a button that opens the folder picker
 LOADING_CHIPS = [('CI', [Chip('…', 'dim-label', '')]), ('PRs', [Chip('…', 'dim-label', '')])]
 HEALTH_CLASSES = ('health-error', 'health-warning', 'health-accent', 'health-success')
 
 
 class Card(Gtk.Box):
     def __init__(self, full_name, on_remove, on_rename, on_drag_begin, on_drag_end, custom_title=None,
-                 other_groups=lambda ident: [], on_move=lambda ident, group: None, can_drag=lambda: True):
+                 other_groups=lambda ident: [], on_move=lambda ident, group: None, can_drag=lambda: True,
+                 on_link=None, on_unlink=None, linked=lambda ident: False, offer=lambda: False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.add_css_class('card')
         for s in ('top', 'bottom', 'start', 'end'):
             getattr(self, f'set_margin_{s}')(6)
         self.ident, self.url, self.fetched_name, self.custom_title = full_name, None, full_name, custom_title
         self.status = None  # last RepoStatus, used by the sort menu
+        self.local = None   # LocalState of the linked clone (local.py), None = unlinked or signal off
+        self.on_link, self.on_unlink, self.linked, self.offer = on_link, on_unlink, linked, offer
         self.grab_point, self.can_drag = (0, 0), can_drag
         self.on_rename = lambda text: on_rename(full_name, text)
         # width is capped so a long name (or the host-prefixed identity shown before the first fetch) cannot widen
@@ -68,6 +73,8 @@ class Card(Gtk.Box):
         actions = Gio.SimpleActionGroup()
         for name, cb, param in (('rename', lambda *_: self._start_edit(), None), ('open', self._open, None),
                                 ('remove', lambda *_: on_remove(self.ident), None),
+                                ('link', lambda *_: self.on_link(self.ident), None),
+                                ('unlink', lambda *_: self.on_unlink(self.ident), None),
                                 ('move', lambda _a, g: on_move(self.ident, g.get_string()), GLib.VariantType('s'))):
             act = Gio.SimpleAction.new(name, param)
             act.connect('activate', cb)
@@ -97,6 +104,12 @@ class Card(Gtk.Box):
             for group in groups:
                 moves.append(group, Gio.Action.print_detailed_name('card.move', GLib.Variant('s', group)))
             menu.append_submenu('Move to group', moves)
+        if self.on_link:
+            if self.linked(self.ident):
+                menu.append('Relink local clone…', 'card.link')
+                menu.append('Unlink local clone', 'card.unlink')
+            else:
+                menu.append('Link local clone…', 'card.link')
         menu.append('Remove', 'card.remove')
         return menu
 
@@ -216,7 +229,7 @@ class Card(Gtk.Box):
         self.fetched_name = s.name
         self.entry.set_placeholder_text(s.name)
         self.title.set_label(self.custom_title or s.name)
-        self._set_chips(chips_for(s))
+        self._render()
         if s.error:
             self.stats.set_label(s.error)
             self.stats.add_css_class('error')
@@ -227,7 +240,22 @@ class Card(Gtk.Box):
         if severity(s) != 'none':
             self.add_css_class(f'health-{severity(s)}')
 
+    def set_local(self, state):
+        self.local = state
+        self._render()
+
+    def _render(self):
+        base = chips_for(self.status) if self.status else LOADING_CHIPS
+        git = local.chips(self.local)
+        if not git and self.on_link and self.offer() and not self.linked(self.ident):  # keeps the row, and the card height, uniform
+            git = [Chip('+ Link local clone', 'dim-label', 'Show branch, ahead/behind and changes of your clone', LINK)]
+        self._set_chips(base + ([('Git', git)] if git else []))
+
     def _chip_label(self, chip):
+        if chip.url == LINK:
+            button = Gtk.Button(label=chip.text, css_classes=['flat', 'chip', 'chip-link', chip.css], tooltip_text=chip.tooltip)
+            button.connect('clicked', lambda *_: self.on_link(self.ident))
+            return button
         if chip.url:  # PR/MR chips open the matching list in the browser; a real button so keyboard/Orca reach it
             button = Gtk.Button(label=chip.text, css_classes=['flat', 'chip', 'chip-link', chip.css],
                                 tooltip_text=(chip.tooltip + '\n\n' if chip.tooltip else '') + 'Open in browser')

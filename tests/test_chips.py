@@ -1,6 +1,7 @@
 import unittest
+from datetime import datetime, timezone
 
-from painel.chips import Chip, chips_for
+from painel.chips import Chip, age_days, chips_for
 from painel.status import RepoStatus
 
 
@@ -85,3 +86,38 @@ class ChipLinkTest(unittest.TestCase):
         self.assertEqual(groups['CI'][0].url, '')
         anon = dict(chips_for(status(prs={'draft': 1}, total=7, pr_detail=False, url='https://github.com/o/r')))['PRs']
         self.assertEqual([bool(c.url) for c in anon], [True, True, False])  # "7 open", "1 draft", hint
+
+
+NOW = datetime(2026, 10, 12, tzinfo=timezone.utc)
+
+
+class SignalChipsTest(unittest.TestCase):
+    def test_nothing_enabled_means_no_extra_group(self):
+        self.assertEqual([g for g, _ in chips_for(status(url='https://github.com/o/r'), NOW)], ['CI', 'PRs'])
+
+    def test_security_chip_sums_both_sources_and_links(self):
+        s = status(url='https://github.com/o/r', dependabot=2, code_scanning=1)
+        chip = dict(chips_for(s, NOW))['Repo'][0]
+        self.assertEqual((chip.text, chip.css, chip.url), ('⛨ 3 alerts', 'warning', 'https://github.com/o/r/security'))
+        self.assertIn('Dependabot 2', chip.tooltip)
+
+    def test_zero_or_unknown_alerts_show_nothing(self):
+        self.assertNotIn('Repo', dict(chips_for(status(dependabot=0, code_scanning=None), NOW)))
+
+    def test_capped_code_scanning_count_says_plus(self):
+        self.assertEqual(texts(chips_for(status(code_scanning=100), NOW), 'Repo'), ['⛨ 100+ alerts'])
+
+    def test_unresolved_chip_in_the_pr_group(self):
+        s = status(prs={'waiting': 1}, unresolved=4, details={'unresolved': ['#1 a: 4']})
+        chip = dict(chips_for(s, NOW))['PRs'][-1]
+        self.assertEqual((chip.text, chip.css, chip.tooltip), ('💬 4 unresolved', 'warning', '#1 a: 4'))
+        self.assertNotIn('unresolved', ' '.join(texts(chips_for(status(unresolved=0), NOW), 'PRs')))
+
+    def test_release_and_push_ages(self):
+        s = status(release='v1.2', released_at='2026-09-02T00:00:00Z', pushed_at='2026-10-09T10:00:00Z')
+        self.assertEqual(texts(chips_for(s, NOW), 'Repo'), ['⬆ v1.2 · 40d ago', 'pushed 2d ago'])
+        self.assertEqual(texts(chips_for(status(pushed_at='2026-10-12T01:00:00Z'), NOW), 'Repo'), ['pushed today'])
+
+    def test_age_days_handles_garbage(self):
+        self.assertEqual(age_days('2026-10-02T00:00:00Z', NOW), 10)
+        self.assertIsNone(age_days('nope', NOW))

@@ -2,6 +2,7 @@ from .forgejo import ForgejoProvider
 from .github import BATCH, GitHubProvider
 from .gitlab import GitLabProvider
 from .http import HttpError, NetworkError
+from .review_requests import ReviewRequests
 from .repo_id import GITHUB_HOST, is_forgejo_host, is_gitlab_host
 from .status import RepoStatus
 
@@ -23,12 +24,17 @@ def _message(e):
 class StatusService:
     """Resolves the provider for an identity and turns failures into RepoStatus(error=...)."""
 
-    def __init__(self, http):
-        self.http = http
+    def __init__(self, http, signals=frozenset):
+        """`signals`: callable -> enabled optional card signals, read on every request so toggles apply at once."""
+        self.http, self.signals, self.unavailable = http, signals, set()
+        self._reviews = ReviewRequests(http)
+
+    def _github(self):
+        return GitHubProvider(self.http, self.signals(), self.unavailable)
 
     def _provider(self, host):
         if host == GITHUB_HOST:
-            return GitHubProvider(self.http)
+            return self._github()
         if is_gitlab_host(host):
             return GitLabProvider(host, self.http)
         if is_forgejo_host(host):
@@ -45,7 +51,7 @@ class StatusService:
         caller fetches each repo alone. None = that repo needs the REST path (and its real error message)."""
         paths = [i.partition('/')[2] for i in idents]
         try:
-            return dict(zip(idents, GitHubProvider(self.http).heads(paths, token).values()))
+            return dict(zip(idents, self._github().heads(paths, token).values()))
         except _FAILURES:
             return {}
 
@@ -58,6 +64,13 @@ class StatusService:
             return provider.fetch(path, token, head) if head else provider.fetch(path, token)
         except _FAILURES as e:
             return RepoStatus(name=path, error=_message(e))
+
+    def review_requests(self, host, token):
+        """Lowercase repo paths on `host` with a PR/MR asking for my review; failures are not errors: empty set."""
+        try:
+            return self._reviews.paths(host, token)
+        except _FAILURES:
+            return set()
 
     def wait(self, host):
         """Seconds the server asked us to stay away from `host` (Retry-After, exhausted quota); 0 = go ahead."""

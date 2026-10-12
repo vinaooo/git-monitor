@@ -1,5 +1,6 @@
 """What the card shows as colored chips for a RepoStatus. Pure; the card only renders it."""
 from collections import namedtuple
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from . import repo_id
@@ -41,8 +42,36 @@ def _chips(table, counts, details, prefix='', link=None):
             for key, text, css in table if counts.get(key)]
 
 
-def chips_for(s):
-    """-> [(group name, [Chip])]; empty for a status without data."""
+def age_days(iso, now):
+    """Whole days from the ISO time `iso` to `now`; None if it does not parse."""
+    try:
+        return (now - datetime.fromisoformat(iso.replace('Z', '+00:00'))).days
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _ago(iso, now):
+    days = age_days(iso, now)
+    return None if days is None else 'today' if days < 1 else f'{days}d ago'
+
+
+def _repo_chips(s, now):
+    """Optional signal chips; each appears only when its data is there and non-trivial."""
+    chips = []
+    alerts = (s.dependabot or 0) + (s.code_scanning or 0)
+    if alerts:
+        more = '+' if (s.code_scanning or 0) >= 100 else ''
+        chips.append(Chip(f'⛨ {alerts}{more} alerts', 'warning', f'Dependabot {s.dependabot or 0} · Code scanning {s.code_scanning or 0}',
+                          f'{s.url}/security' if s.url else ''))
+    if s.release and (age := _ago(s.released_at, now)):
+        chips.append(Chip(f'⬆ {s.release} · {age}', 'dim-label', 'Latest release', f'{s.url}/releases' if s.url else ''))
+    if s.pushed_at and (age := _ago(s.pushed_at, now)):
+        chips.append(Chip(f'pushed {age}', 'dim-label', 'Last push'))
+    return chips
+
+
+def chips_for(s, now=None):
+    """-> [(group name, [Chip])]; empty for a status without data. `now` is injectable for tests."""
     if s is None or s.error:
         return []
     ci = _chips(_CI, s.ci_counts or {}, s.details, 'ci-') or [Chip('No CI', 'dim-label', '')]
@@ -53,4 +82,7 @@ def chips_for(s):
         pr.append(Chip('no review detail · add a token', 'dim-label', 'Review states need a GitHub token (Preferences)'))
     else:
         pr = _chips(_PR, counts, s.details, link=link) or [Chip('No open PRs', 'dim-label', '')]
-    return [('CI', ci), ('PRs', pr)]
+    if s.unresolved:
+        pr.append(Chip(f'💬 {s.unresolved} unresolved', 'warning', '\n'.join(s.details.get('unresolved', []))))
+    repo = _repo_chips(s, now or datetime.now(timezone.utc))
+    return [('CI', ci), ('PRs', pr)] + ([('Repo', repo)] if repo else [])
