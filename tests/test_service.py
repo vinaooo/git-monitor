@@ -29,6 +29,25 @@ class ServiceTest(unittest.TestCase):
         self.assertIn('Unsupported', self.fetch(None, 'example.com/a/b').error)
 
 
+class ListReposTest(unittest.TestCase):
+    def list(self, http, host='github.com'):
+        return StatusService(http).list_repos(host, 'o', None)
+
+    def test_returns_repos_and_truncated_flag(self):
+        http = FakeHttp({'/users/o/repos': ([{'full_name': 'o/a', 'fork': False, 'archived': False, 'private': False}], {})})
+        infos, truncated, error = self.list(http)
+        self.assertEqual(([i.path for i in infos], truncated, error), (['o/a'], False, None))
+
+    def test_errors_become_messages(self):
+        self.assertIn('Not found', self.list(FakeHttp(error=HttpError(404)))[2])
+        self.assertIn('Network error', self.list(FakeHttp(error=NetworkError('down')))[2])
+        self.assertEqual(self.list(FakeHttp(error=HttpError(500)))[2], 'HTTP 500')
+        self.assertEqual(self.list(FakeHttp({'/users/o/repos': ([{}], {})}))[2], 'Unexpected API response')
+
+    def test_unsupported_host(self):
+        self.assertIn('Unsupported host', self.list(FakeHttp(), 'example.com')[2])
+
+
 class SecretHygieneTest(unittest.TestCase):
     def test_errors_never_contain_token(self):
         for err in (NetworkError('boom'), HttpError(403), KeyError('x')):

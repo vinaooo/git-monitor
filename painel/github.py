@@ -1,7 +1,13 @@
+import re
+import urllib.parse
+
 from .health import pr_bucket_github, summarize_ci, summarize_prs
-from .status import RepoStatus
+from .http import HttpError
+from .status import RepoInfo, RepoStatus
 
 API = 'https://api.github.com'
+MAX_PAGES = 10  # listing cap: 1000 repos
+_NEXT = re.compile(r'<([^>]+)>;\s*rel="next"')
 _PR_QUERY = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
   pullRequests(states: OPEN, first: 50) { totalCount nodes { number title isDraft reviewDecision mergeable
     commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } }"""
@@ -11,10 +17,40 @@ class GitHubProvider:
     def __init__(self, http):
         self.http = http
 
-    def fetch(self, path, token):
+    @staticmethod
+    def _headers(token):
         h = {'Accept': 'application/vnd.github+json'}
         if token:
             h['Authorization'] = f'Bearer {token}'
+        return h
+
+    def list_repos(self, account, token):
+        """-> ([RepoInfo], truncated). With a token, the account's private repos too (own account, or an org it can see)."""
+        h, name = self._headers(token), urllib.parse.quote(account)
+        if token:
+            me, _ = self.http.get(f'{API}/user', h)
+            if me['login'].lower() == account.lower():
+                return self._pages(f'{API}/user/repos?affiliation=owner&per_page=100', h)
+            try:
+                return self._pages(f'{API}/orgs/{name}/repos?type=all&per_page=100', h)
+            except HttpError as e:
+                if e.code != 404:  # not an org: a plain user
+                    raise
+        return self._pages(f'{API}/users/{name}/repos?per_page=100', h)
+
+    def _pages(self, url, headers):
+        infos = []
+        for _ in range(MAX_PAGES):
+            body, hdr = self.http.get(url, headers)
+            infos += [RepoInfo(r['full_name'], r['fork'], r['archived'], r['private']) for r in body]
+            m = _NEXT.search(hdr.get('Link') or '')
+            if not m:
+                return infos, False
+            url = m[1]
+        return infos, True
+
+    def fetch(self, path, token):
+        h = self._headers(token)
         repo, _ = self.http.get(f'{API}/repos/{path}', h)
         prs, pr_counts, pr_details, detail = self._pull_requests(path, token, h)
         runs, _ = self.http.get(f'{API}/repos/{path}/actions/runs?branch={repo["default_branch"]}&per_page=20', h)

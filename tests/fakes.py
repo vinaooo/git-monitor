@@ -15,6 +15,8 @@ class FakeHttp(HttpClient):
             raise self.error
         for key, resp in self.routes.items():
             if key in url:
+                if isinstance(resp, Exception):
+                    raise resp
                 return resp
         raise AssertionError(f'unrouted {url}')
 
