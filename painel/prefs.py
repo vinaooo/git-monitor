@@ -48,6 +48,13 @@ class Prefs(Adw.PreferencesDialog):
             master.bind_property('active', row, 'sensitive', 2)  # SYNC_CREATE
             notes.add(row)
 
+        background = Adw.PreferencesGroup(title='Background')
+        page.add(background)
+        row = Adw.SwitchRow(title='Run in background', subtitle='Keep checking and notifying when the window is closed, '
+                            'and start with the session. Quit from the menu to stop.')
+        settings.bind('run-in-background', row, 'active', 0)
+        background.add(row)
+
         virtual = Adw.PreferencesGroup(title='Virtual groups', description='Read-only groups in the sidebar that collect '
                                        'matching repositories from every group. Status-based ones only see repositories '
                                        'already refreshed: turn on \u201cRefresh groups out of focus\u201d to cover all groups.')

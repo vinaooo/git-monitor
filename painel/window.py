@@ -43,6 +43,7 @@ class Window(Adw.ApplicationWindow):
         for key, prop in (('window-width', 'default-width'), ('window-height', 'default-height'),
                           ('window-maximized', 'maximized')):
             settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
+        self.connect('close-request', self._on_close_request)
         self.query, self.results_scheduled = '', 0
         self.vpages, self.mirrors, self.virtual_active, self.virtual_scheduled = {}, {}, False, 0  # virtual groups
         self.cards, self.pages, self.timers = {}, {}, []  # timers: one refresh source per group
@@ -856,6 +857,12 @@ class Window(Adw.ApplicationWindow):
         self.timers = [GLib.timeout_add_seconds(self.intervals.effective(group, default), self._tick, group)
                        for group in self.groups.names()]
 
+    def _on_close_request(self, _win):
+        if not self.settings.get_boolean('run-in-background'):
+            return False
+        self.set_visible(False)  # the app is held (main.py), timers and notifications keep running
+        return True
+
     def _tick(self, group):
         if group not in self.pages:  # renamed or deleted: restart_timers replaced this source already
             return GLib.SOURCE_REMOVE
@@ -863,7 +870,7 @@ class Window(Adw.ApplicationWindow):
             visible = any(self.groups.group_of(i) == group for i in self.mirrors.get(self._selected_vid(), {}))
         else:
             visible = group == self._selected_group()
-        if visible or self.settings.get_boolean('refresh-all-groups'):
+        if visible or not self.get_visible() or self.settings.get_boolean('refresh-all-groups'):  # hidden = background mode
             self.refresh([group])
         return GLib.SOURCE_CONTINUE
 

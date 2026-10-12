@@ -15,6 +15,7 @@
     <key name="notify-ci" type="b"><default>true</default><summary>Send desktop notifications when a repository's CI state changes</summary></key>
     <key name="notify-kinds" type="as"><default>['failed', 'recovered', 'broke_running']</default><summary>Which CI transitions notify: failed, recovered, broke_running</summary></key>
     <key name="notify-muted" type="as"><default>[]</default><summary>Groups that do not send CI notifications</summary></key>
+    <key name="run-in-background" type="b"><default>false</default><summary>Keep running with the window closed (polling and notifications)</summary></key>
     <key name="repos" type="as"><default>[]</default><summary>Legacy flat repository list, only migrated into groups</summary></key>
     <key name="groups" type="a(sas)"><default>[]</default><summary>Repository groups: (name, repositories)</summary></key>
     <key name="sort" type="s"><choices><choice value="manual"/><choice value="name"/><choice value="issues"/><choice value="prs"/><choice value="ci"/></choices><default>"manual"</default><summary>Card sort mode</summary></key>
