@@ -13,12 +13,12 @@ from .status import RepoStatus
 from .sorting import sorted_order
 from .titles import TitleStore
 
-# group marks, worst first: severity -> (sidebar icon, tab glyph, tooltip). A group shows one per kind present, side
-# by side; shapes differ so state never rests on colour alone. "success" = something ready to merge / all green.
-_MARKS = {'error': ('dialog-error-symbolic', '✗', 'Failing'),
-          'warning': ('dialog-warning-symbolic', '⚠', 'Needs attention'),
-          'accent': ('emblem-synchronizing-symbolic', '●', 'In progress'),
-          'success': ('object-select-symbolic', '✓', 'Ready / all good')}
+# group marks, worst first: severity -> (icon, tooltip). A group shows one icon per kind present, side by side, in the
+# sidebar row and over its tab; shapes differ so state never rests on colour alone. "success" = ready to merge / all green.
+_MARKS = {'error': ('dialog-error-symbolic', 'Failing'),
+          'warning': ('dialog-warning-symbolic', 'Needs attention'),
+          'accent': ('emblem-synchronizing-symbolic', 'In progress'),
+          'success': ('object-select-symbolic', 'Ready / all good')}
 
 
 class Window(Adw.ApplicationWindow):
@@ -31,6 +31,7 @@ class Window(Adw.ApplicationWindow):
         self.cards, self.pages, self.timer = {}, {}, 0
         self.pending, self.inflight, self.marks_scheduled = 0, set(), 0
         self.group_marks, self.sidebar_marks = {}, {}  # group name -> [severity]; TabPage -> its sidebar marks box
+        self.tab_marks, self.tab_widgets = {}, {}  # TabPage -> marks box overlaid on the tab bar; TabPage -> its AdwTab
         self.pool = ThreadPoolExecutor(max_workers=4)  # ponytail: fixed 4 workers, make it a setting if hosts rate-limit
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
@@ -120,7 +121,10 @@ class Window(Adw.ApplicationWindow):
                                           tooltip_text='View and sort', menu_model=self._build_view_menu())
         content_header.pack_end(self.view_button)
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        content.append(self.tab_bar)
+        # AdwTab holds one icon at most, so the marks are real icons overlaid on the bar and kept on their tab
+        self.tab_overlay = Gtk.Overlay(child=self.tab_bar)
+        self.tab_bar.add_tick_callback(lambda *_: self._place_tab_marks() or GLib.SOURCE_CONTINUE)
+        content.append(self.tab_overlay)
         content.append(self.tab_view)
         content_view = Adw.ToolbarView(content=content)
         content_view.add_top_bar(content_header)
@@ -220,7 +224,7 @@ class Window(Adw.ApplicationWindow):
 
     def _apply_layout(self):
         sidebar = self.settings.get_string('layout') == 'sidebar'
-        self.tab_bar.set_visible(not sidebar)
+        self.tab_overlay.set_visible(not sidebar)
         self.content_menu.set_visible(not sidebar)  # the sidebar header carries the menu otherwise
         self._sync_toggle()
 
@@ -264,14 +268,13 @@ class Window(Adw.ApplicationWindow):
         while child := box.get_first_child():
             box.remove(child)
         for sev in marks:
-            icon, _glyph, text = _MARKS[sev]
+            icon, text = _MARKS[sev]
             image = Gtk.Image(icon_name=icon, tooltip_text=text, css_classes=[f'mark-{sev}'])
             image.update_property([Gtk.AccessibleProperty.LABEL], [text])
             box.append(image)
 
     def _update_marks(self):
         every = self.settings.get_boolean('refresh-all-groups')
-        tabs = self.settings.get_string('layout') == 'tabs'
         self.group_marks = {}
         for name, page in self.pages.items():
             cards = [self.cards[i] for i in self.groups.repos(name) if i in self.cards]
@@ -282,11 +285,29 @@ class Window(Adw.ApplicationWindow):
             self.group_marks[name] = marks
             tab = self.tab_view.get_page(page)
             tab.set_keyword(sev)  # carries the severity: sidebar rows follow its notify
-            tab.set_title(f'{name}  {" ".join(_MARKS[m][1] for m in marks)}' if tabs and marks else name)
-            tab.set_tooltip(', '.join(_MARKS[m][2] for m in marks))
+            tab.set_tooltip(', '.join(_MARKS[m][1] for m in marks))
+            if tab not in self.tab_marks:
+                box = Gtk.Box(spacing=4, halign=Gtk.Align.START, valign=Gtk.Align.CENTER, can_target=False)
+                self.tab_overlay.add_overlay(box)
+                self.tab_marks[tab] = box
+            self._fill_marks(self.tab_marks[tab], marks)
             if (box := self.sidebar_marks.get(tab)):
                 self._fill_marks(box, marks)
+        for tab in [t for t in self.tab_marks if t.get_child() is None or t.get_child().name not in self.pages]:
+            self.tab_overlay.remove_overlay(self.tab_marks.pop(tab))
         self._tint_tabs()
+
+    def _place_tab_marks(self):
+        """Per frame while the tab bar is shown: park each marks box at the start of its tab (hidden if scrolled out)."""
+        width = self.tab_overlay.get_width()
+        for tab, box in self.tab_marks.items():
+            ok, bounds = self.tab_widgets[tab].compute_bounds(self.tab_overlay) if tab in self.tab_widgets else (False, None)
+            x = int(bounds.get_x()) + 8 if ok else 0
+            visible = ok and x >= 0 and x + box.get_width() <= width and bool(box.get_first_child())
+            if box.get_visible() != visible:
+                box.set_visible(visible)
+            if visible and box.get_margin_start() != x:
+                box.set_margin_start(x)
 
     def _tint_tabs(self):
         """AdwTabBar has no per-tab API, so find its internal `tab` widgets and tag them by page."""
@@ -301,6 +322,7 @@ class Window(Adw.ApplicationWindow):
             if widget.get_css_name() == 'tab' and widget.find_property('page'):
                 page = widget.get_property('page')
                 if page:
+                    self.tab_widgets[page] = widget
                     self._set_tint(widget, page.get_keyword())
 
     # --- groups ---
