@@ -6,6 +6,9 @@
     <key name="window-maximized" type="b"><default>false</default><summary>Window is maximized</summary></key>
     <key name="colored-tabs" type="b"><default>false</default><summary>Tint tabs and sidebar rows by group health</summary></key>
     <key name="colored-icons" type="b"><default>false</default><summary>Color the group health icons</summary></key>
+    <key name="sources" type="a(sssasas)"><default>[]</default><summary>Groups imported from an account: (group, host, account, kinds, known repositories)</summary></key>
+    <key name="sync-imported" type="b"><default>false</default><summary>Add new repositories of imported accounts automatically</summary></key>
+    <key name="sync-asked" type="b"><default>false</default><summary>The first-import sync question was answered</summary></key>
     <key name="repos" type="as"><default>[]</default><summary>Legacy flat repository list, only migrated into groups</summary></key>
     <key name="groups" type="a(sas)"><default>[]</default><summary>Repository groups: (name, repositories)</summary></key>
     <key name="layout" type="s"><choices><choice value="tabs"/><choice value="sidebar"/></choices><default>"sidebar"</default><summary>How groups are shown</summary></key>
