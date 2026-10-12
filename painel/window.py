@@ -45,6 +45,7 @@ class Window(Adw.ApplicationWindow):
             self._make_page(group)
             for repo in self.groups.repos(group):
                 self._add_card(repo, group)
+        self._apply_colors()
         self._apply_layout()
         self._apply_view()
         self._apply_sort()
@@ -55,6 +56,8 @@ class Window(Adw.ApplicationWindow):
         settings.connect('changed::refresh-seconds', lambda *_: self.restart_timer())
         settings.connect('changed::layout', lambda *_: (self._apply_layout(), self._update_marks()))
         settings.connect('changed::view', lambda *_: self._apply_view())
+        for key in ('colored-tabs', 'colored-icons'):
+            settings.connect(f'changed::{key}', lambda *_: self._apply_colors())
         settings.connect('changed::refresh-all-groups', lambda *_: self._update_marks())
         for key in ('sort', 'sort-reverse'):
             settings.connect(f'changed::{key}', lambda *_: self._apply_sort())
@@ -228,6 +231,10 @@ class Window(Adw.ApplicationWindow):
         self.split.set_show_sidebar(sidebar and not collapsed)
 
     # --- view and sort (live: re-sorted whenever a refresh brings new numbers) ---
+    def _apply_colors(self):
+        for key in ('colored-tabs', 'colored-icons'):  # style.py scopes the colour rules under these window classes
+            (self.add_css_class if self.settings.get_boolean(key) else self.remove_css_class)(key)
+
     def _apply_view(self):
         columns = {'grid-small': 6, 'grid-medium': 4, 'grid-large': 2, 'list': 1}
         mode = self.settings.get_string('view')
@@ -258,7 +265,7 @@ class Window(Adw.ApplicationWindow):
             box.remove(child)
         for sev in marks:
             icon, _glyph, text = _MARKS[sev]
-            image = Gtk.Image(icon_name=icon, tooltip_text=text, css_classes=[sev])
+            image = Gtk.Image(icon_name=icon, tooltip_text=text, css_classes=[f'mark-{sev}'])
             image.update_property([Gtk.AccessibleProperty.LABEL], [text])
             box.append(image)
 
