@@ -23,6 +23,8 @@ _MARKS = {'error': ('dialog-error-symbolic', 'Failing'),
           'accent': ('emblem-synchronizing-symbolic', 'In progress'),
           'success': ('object-select-symbolic', 'Ready / all good')}
 
+SYNC_SECONDS = 1800  # how often imported accounts are re-listed
+
 
 class Window(Adw.ApplicationWindow):
     def __init__(self, app, settings, service, tokens):
@@ -60,6 +62,9 @@ class Window(Adw.ApplicationWindow):
         self.tab_view.connect('notify::selected-page', lambda *_: self._on_group_focused())
         self.restart_timer()
         settings.connect('changed::refresh-seconds', lambda *_: self.restart_timer())
+        settings.connect('changed::sync-imported', lambda *_: self._sync_sources())
+        GLib.timeout_add_seconds(5, lambda: self._sync_sources() or GLib.SOURCE_REMOVE)  # not on the startup path
+        GLib.timeout_add_seconds(SYNC_SECONDS, lambda: self._sync_sources() or GLib.SOURCE_CONTINUE)
         settings.connect('changed::layout', lambda *_: (self._apply_layout(), self._update_marks()))
         settings.connect('changed::view', lambda *_: self._apply_view())
         for key in ('colored-tabs', 'colored-icons'):
@@ -474,6 +479,33 @@ class Window(Adw.ApplicationWindow):
         self.sources.add(group, host, account, kinds, listed)
         self.refresh()
         self.toasts.add_toast(Adw.Toast(title=f'Imported {len(new)} repositories into {group}'))
+
+    def _sync_sources(self):
+        """Add repositories an imported account created since the last listing (only with the preference on)."""
+        if not self.settings.get_boolean('sync-imported'):
+            return
+        for group, host, account, kinds in self.sources.all():
+            token = self.tokens.get(host)
+            self.pool.submit(self._sync_worker, group, host, account, kinds, token)
+
+    def _sync_worker(self, group, host, account, kinds, token):
+        infos, _truncated, error = self.service.list_repos(host, account, token)
+        if not error:
+            GLib.idle_add(self._synced, group, host, kinds, infos)
+
+    def _synced(self, group, host, kinds, infos):
+        if group not in self.pages:  # deleted meanwhile
+            return
+        listed = [f'{host}/{i.path}' for i in importer.select(infos, 'forks' in kinds, 'archived' in kinds)]
+        added = 0
+        for ident in self.sources.take_new(group, listed):
+            if self.groups.group_of(ident) is None:  # tracked elsewhere already: leave it there
+                self.groups.add_repo(group, ident)
+                self._add_card(ident, group)
+                added += 1
+        if added:
+            self.refresh()
+            self.toasts.add_toast(Adw.Toast(title=f'{added} new repositories in {group}'))
 
     def ask_repo(self, *_):
         entry = Gtk.Entry(placeholder_text='GitHub/GitLab URL or owner/name', activates_default=True)

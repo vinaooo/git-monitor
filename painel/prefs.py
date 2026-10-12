@@ -32,6 +32,14 @@ class Prefs(Adw.PreferencesDialog):
             settings.bind(key, row, 'active', 0)
             look.add(row)
 
+        sync = Adw.PreferencesGroup(title='Import')
+        page.add(sync)
+        sync_row = Adw.SwitchRow(title='Keep imported groups in sync',
+                                 subtitle='Every 30 minutes, add repositories the imported accounts created since.')
+        settings.bind('sync-imported', sync_row, 'active', 0)
+        sync_row.connect('notify::active', lambda *_: settings.set_boolean('sync-asked', True))  # no first-import question
+        sync.add(sync_row)
+
         token_group = Adw.PreferencesGroup(title='Access tokens (optional)',
                                       description='For private repos and higher rate limits. Use read-only tokens: '
                                                   'GitHub fine-grained (Metadata, Issues, Pull requests, '
