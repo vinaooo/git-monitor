@@ -11,6 +11,23 @@ finish-args:
   - --device=dri
   - --filesystem=xdg-config/gtk-4.0:ro
 modules:
+  # Read-only `git status` for linked local clones. The Platform ships no git; minimal build, no network/TLS/perl/python.
+  - name: git
+    buildsystem: simple
+    build-commands:
+      - make -j$FLATPAK_BUILDER_N_JOBS prefix=/app NO_CURL=1 NO_EXPAT=1 NO_OPENSSL=1 NO_PERL=1 NO_PYTHON=1 NO_TCLTK=1 NO_GETTEXT=1 NO_INSTALL_HARDLINKS=1 install
+    cleanup:
+      - /share/git-core
+      - /share/gitweb
+    sources:
+      - type: archive
+        url: https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.53.0.tar.xz
+        sha256: 5818bd7d80b061bbbdfec8a433d609dc8818a05991f731ffc4a561e2ca18c653
+        x-checker-data:
+          type: anitya
+          project-id: 5350
+          stable-only: true
+          url-template: https://mirrors.edge.kernel.org/pub/software/scm/git/git-$version.tar.xz
   - name: painel
     buildsystem: meson
     sources:

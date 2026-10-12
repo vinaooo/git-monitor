@@ -28,6 +28,8 @@
     <key name="signal-security" type="b"><default>false</default><summary>Card signal: security alerts</summary></key>
     <key name="signal-reviews" type="b"><default>false</default><summary>Card signal: unresolved review comments</summary></key>
     <key name="signal-release" type="b"><default>false</default><summary>Card signal: last release</summary></key>
+    <key name="signal-local" type="b"><default>false</default><summary>Card signal: state of linked local clones</summary></key>
+    <key name="clones" type="a{ss}"><default>{}</default><summary>Linked local clone folder by repository</summary></key>
     <key name="signal-push" type="b"><default>false</default><summary>Card signal: last push</summary></key>
   </schema>
 </schemalist>

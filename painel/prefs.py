@@ -58,6 +58,10 @@ class Prefs(Adw.PreferencesDialog):
             settings.bind(f'signal-{ident}', row, 'active', 0)
             row.connect('notify::active', lambda *_: self._update_warning())
             cards.add(row)
+        row = Adw.SwitchRow(title='Local clones', subtitle='Branch, ahead/behind and uncommitted changes of clones you link '
+                            'from a card\u2019s menu. Read-only git; paths never leave this machine.')
+        settings.bind('signal-local', row, 'active', 0)
+        cards.add(row)
         self.settings = settings
 
         background = Adw.PreferencesGroup(title='Background')
