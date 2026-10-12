@@ -6,6 +6,7 @@ CSS = """
 .card.health-warning { box-shadow: inset 4px 0 0 @warning_color, 0 0 0 1px alpha(currentColor, .1); }
 .card.health-accent  { box-shadow: inset 4px 0 0 @blue_3, 0 0 0 1px alpha(currentColor, .1); }
 .card.health-success { box-shadow: inset 4px 0 0 @success_color, 0 0 0 1px alpha(currentColor, .1); }
+window .card.search-hit { background-color: mix(@accent_bg_color, @card_bg_color, .65); background-image: none; box-shadow: 0 0 0 3px @accent_bg_color; }
 /* group health tint (only with the colored-tabs preference): whole tab / sidebar row, a light (white-mixed) translucent wash so the theme still shows through */
 window.colored-tabs tab.tint-error, window.colored-tabs row.tint-error       { background: alpha(mix(@error_color, white, .4), .30); }
 window.colored-tabs tab.tint-warning, window.colored-tabs row.tint-warning   { background: alpha(mix(@warning_color, white, .4), .30); }
