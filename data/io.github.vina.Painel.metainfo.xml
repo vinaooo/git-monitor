@@ -3,15 +3,15 @@
   <id>io.github.vina.Painel</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
-  <name>Painel</name>
+  <name>Git Monitor</name>
   <summary>Monitor GitHub and GitLab repositories</summary>
   <description>
     <p>Add a GitHub or GitLab repository by URL or name and see its open issues, pending pull or merge requests and CI status at a glance.</p>
   </description>
   <launchable type="desktop-id">io.github.vina.Painel.desktop</launchable>
   <developer id="io.github.vinaooo"><name>Vinicius Pedrinho</name></developer>
-  <url type="homepage">https://github.com/vinaooo/painel</url>
-  <url type="bugtracker">https://github.com/vinaooo/painel/issues</url>
+  <url type="homepage">https://github.com/vinaooo/git-monitor</url>
+  <url type="bugtracker">https://github.com/vinaooo/git-monitor/issues</url>
   <requires><display_length compare="ge">360</display_length></requires>
   <supports><control>keyboard</control><control>pointing</control><control>touch</control></supports>
   <content_rating type="oars-1.1"/>

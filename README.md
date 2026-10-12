@@ -1,4 +1,4 @@
-# Painel
+# Git Monitor
 
 A GNOME dashboard for your GitHub and GitLab repositories. One card per repository shows its open issues, pending pull/merge requests, CI state and a button to open it in the browser. Built with GTK4 + libadwaita (Python/PyGObject), no third-party Python dependencies.
 
@@ -13,7 +13,7 @@ A GNOME dashboard for your GitHub and GitLab repositories. One card per reposito
 
 ## Install and run
 
-Painel is not on Flathub yet. Build and install the Flatpak from a checkout:
+Git Monitor is not on Flathub yet. Build and install the Flatpak from a checkout:
 
 ```
 flatpak-builder --user --install --force-clean build-flatpak io.github.vina.Painel.yml

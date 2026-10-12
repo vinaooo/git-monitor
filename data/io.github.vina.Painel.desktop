@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=Painel
+Name=Git Monitor
 Comment=Monitor GitHub and GitLab repositories
 Keywords=github;gitlab;ci;issues;pull requests;merge requests;
 Exec=painel

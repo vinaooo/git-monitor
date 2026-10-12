@@ -36,7 +36,7 @@ SYNC_SECONDS = 1800  # how often imported accounts are re-listed
 
 class Window(Adw.ApplicationWindow):
     def __init__(self, app, settings, service, tokens):
-        super().__init__(application=app, title='Painel', width_request=360)
+        super().__init__(application=app, title='Git Monitor', width_request=360)
         self.settings, self.service, self.tokens = settings, service, tokens
         for key, prop in (('window-width', 'default-width'), ('window-height', 'default-height'),
                           ('window-maximized', 'maximized')):
@@ -117,7 +117,7 @@ class Window(Adw.ApplicationWindow):
         self.group_menu = group_menu
 
         # content pane: own header bar (title = current group), like Files
-        self.window_title = Adw.WindowTitle(title='Painel', subtitle='')
+        self.window_title = Adw.WindowTitle(title='Git Monitor', subtitle='')
         content_header = Adw.HeaderBar(title_widget=self.window_title, show_start_title_buttons=False)
         act = Gio.SimpleAction.new('add-repo', None)
         act.connect('activate', self.ask_repo)
@@ -167,7 +167,7 @@ class Window(Adw.ApplicationWindow):
         self.toasts = Adw.ToastOverlay(child=content_view)
 
         # sidebar pane: runs the full window height, header bar included, like Files
-        sidebar_header = Adw.HeaderBar(title_widget=Adw.WindowTitle(title='Painel', subtitle=''),
+        sidebar_header = Adw.HeaderBar(title_widget=Adw.WindowTitle(title='Git Monitor', subtitle=''),
                                        show_end_title_buttons=False)
         sidebar_header.pack_end(Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu))
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -668,7 +668,7 @@ class Window(Adw.ApplicationWindow):
             self.import_account(host, account, chosen, kinds, listed, interval)
             return
         dlg = Adw.AlertDialog(heading='Keep this group in sync?',
-                              body='Painel can add repositories this account creates later. You can change this in Preferences.')
+                              body='Git Monitor can add repositories this account creates later. You can change this in Preferences.')
         dlg.add_response('no', 'Not now')
         dlg.add_response('yes', 'Keep in sync')
         dlg.set_response_appearance('yes', Adw.ResponseAppearance.SUGGESTED)
