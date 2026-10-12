@@ -10,12 +10,15 @@ HOSTS = ('github.com', 'gitlab.com')
 class ImportDialog(Adw.Dialog):
     """Pick an account, see what it holds (public, plus private when a token is stored), tick the repositories,
     optionally set the group's refresh interval, import.
+    `prefill=(host, account, kinds)` is for an already imported group: account locked, listing starts at once,
+    refresh interval hidden (the group keeps its own).
     Self-contained so the entry point can move: `service.list_repos` + `submit` do the I/O, `on_import` the result."""
 
-    def __init__(self, settings, tokens, service, submit, tracked, on_import, others=()):
+    def __init__(self, settings, tokens, service, submit, tracked, on_import, others=(), prefill=None):
         super().__init__(title='Import from account', content_width=460, content_height=540)
         self.settings, self.tokens, self.service, self.submit = settings, tokens, service, submit
         self.tracked, self.on_import = tracked, on_import
+        self.locked = bool(prefill)
         self.found = None  # (host, account, token, infos, truncated) once listed
         self.checks, self.tracked_now = {}, set()  # ident -> CheckButton; idents already tracked when listed
 
@@ -71,6 +74,19 @@ class ImportDialog(Adw.Dialog):
         self.account.connect('changed', lambda *_: self._reset())
         self.forks.connect('notify::active', lambda *_: self._kind_toggled('fork'))
         self.archived.connect('notify::active', lambda *_: self._kind_toggled('archived'))
+        if prefill:
+            host, account, kinds = prefill
+            if host not in self.hosts:
+                self.hosts.append(host)
+                self.host.set_model(Gtk.StringList.new(self.hosts))
+            self.host.set_selected(self.hosts.index(host))
+            self.account.set_text(account)
+            self.forks.set_active('forks' in kinds)
+            self.archived.set_active('archived' in kinds)
+            for row in (self.host, self.account):
+                row.set_sensitive(False)
+            refresh_group.set_visible(False)
+            self._find()
 
     def _reset(self):
         self.found = None
@@ -174,4 +190,4 @@ class ImportDialog(Adw.Dialog):
         kinds = [k for k, row in (('forks', self.forks), ('archived', self.archived)) if row.get_active()]
         chosen, listed = self._chosen(), [f'{host}/{i.path}' for i in infos]  # listed: unchosen ones must not sync in later
         self.close()
-        self.on_import(host, account, chosen, kinds, listed, self.interval.value())
+        self.on_import(host, account, chosen, kinds, listed, None if self.locked else self.interval.value())
