@@ -3,6 +3,7 @@ from gi.repository import Adw, Gtk
 from . import repo_id
 from .tokens import TokenStoreError
 from .rate_limit import LIMITS, github_load, usage_text
+from .virtual import DEFINITIONS
 
 
 class Prefs(Adw.PreferencesDialog):
@@ -33,6 +34,15 @@ class Prefs(Adw.PreferencesDialog):
             settings.bind(key, row, 'active', 0)
             look.add(row)
 
+        virtual = Adw.PreferencesGroup(title='Virtual groups', description='Read-only groups in the sidebar that collect '
+                                       'matching repositories from every group. Status-based ones only see repositories '
+                                       'already refreshed: turn on \u201cRefresh groups out of focus\u201d to cover all groups.')
+        page.add(virtual)
+        for d in DEFINITIONS:
+            row = Adw.SwitchRow(title=d.title, subtitle=d.subtitle, active=d.id not in settings.get_strv('virtual-disabled'))
+            row.connect('notify::active', lambda r, _p, vid=d.id: self._toggle_virtual(settings, vid, r.get_active()))
+            virtual.add(row)
+
         sync = Adw.PreferencesGroup(title='Import')
         page.add(sync)
         sync_row = Adw.SwitchRow(title='Keep imported groups in sync',
@@ -57,6 +67,11 @@ class Prefs(Adw.PreferencesDialog):
         self.rows['github.com'].connect('changed', lambda *_: self._update_warning())
         self._update_warning()
         self.connect('closed', lambda *_: self._save())
+
+    @staticmethod
+    def _toggle_virtual(settings, vid, on):
+        off = [v for v in settings.get_strv('virtual-disabled') if v != vid]
+        settings.set_strv('virtual-disabled', off if on else [*off, vid])
 
     def _save(self):
         for host, row in self.rows.items():
