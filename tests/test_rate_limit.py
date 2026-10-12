@@ -1,6 +1,6 @@
 import unittest
 
-from painel.rate_limit import github_warning, github_warning_groups, min_interval
+from painel.rate_limit import github_load, github_warning, github_warning_groups, min_interval, usage_text
 
 
 class RateLimitTest(unittest.TestCase):
@@ -52,3 +52,19 @@ class MinIntervalTest(unittest.TestCase):
     def test_the_suggestion_fits_the_limit(self):
         for repos in (1, 10, 87, 400):
             self.assertIsNone(github_warning(min_interval(repos, True), repos, True), repos)
+
+
+class UsageTest(unittest.TestCase):
+    def test_load_sums_requests_per_hour(self):
+        self.assertEqual(github_load([(10, 60), (20, 300)], True), 2520)  # 10*3*60 + 20*3*12
+        self.assertEqual(github_load([], True), 0)
+
+    def test_text_always_names_the_limit_and_the_share_used(self):
+        self.assertEqual(usage_text(1800, True), '~1800 of 5000 requests/hour (36%)')
+        self.assertEqual(usage_text(0, True), '~0 of 5000 requests/hour (0%)')
+
+    def test_text_uses_the_anonymous_limit_without_a_token(self):
+        self.assertEqual(usage_text(30, False), '~30 of 60 requests/hour (50%)')
+
+    def test_text_shows_percentages_above_100(self):
+        self.assertEqual(usage_text(15660, True), '~15660 of 5000 requests/hour (313%)')

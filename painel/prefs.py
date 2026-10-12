@@ -2,7 +2,7 @@ from gi.repository import Adw, Gtk
 
 from . import repo_id
 from .tokens import TokenStoreError
-from .rate_limit import github_warning_groups
+from .rate_limit import LIMITS, github_load, usage_text
 
 
 class Prefs(Adw.PreferencesDialog):
@@ -74,6 +74,7 @@ class Prefs(Adw.PreferencesDialog):
         load = [(sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups[n]), self.custom.get(n, default))
                 for n in names]
         has_token = bool(self.rows[repo_id.GITHUB_HOST].get_text().strip())
-        warning = github_warning_groups(load, has_token)
-        self.interval.set_subtitle(warning or '')
-        (self.interval.add_css_class if warning else self.interval.remove_css_class)('warning')
+        per_hour = github_load(load, has_token)
+        over = per_hour > LIMITS[has_token]
+        self.interval.set_subtitle(usage_text(per_hour, has_token) + (' Add a token to raise it.' if over and not has_token else ''))
+        (self.interval.add_css_class if over else self.interval.remove_css_class)('warning')

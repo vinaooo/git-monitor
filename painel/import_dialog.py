@@ -12,7 +12,7 @@ class ImportDialog(Adw.Dialog):
     optionally set the group's refresh interval, import.
     Self-contained so the entry point can move: `service.list_repos` + `submit` do the I/O, `on_import` the result."""
 
-    def __init__(self, settings, tokens, service, submit, tracked, on_import):
+    def __init__(self, settings, tokens, service, submit, tracked, on_import, others=()):
         super().__init__(title='Import from account', content_width=460, content_height=540)
         self.settings, self.tokens, self.service, self.submit = settings, tokens, service, submit
         self.tracked, self.on_import = tracked, on_import
@@ -39,7 +39,7 @@ class ImportDialog(Adw.Dialog):
         self.list_rows = []
         picker_group = Adw.PreferencesGroup()
         picker_group.add(self.picker)
-        self.interval = IntervalRows(settings.get_int('refresh-seconds'))
+        self.interval = IntervalRows(settings.get_int('refresh-seconds'), others=others)
         self.interval.connect(self._summarize)
         refresh_group = Adw.PreferencesGroup(title='Refresh')
         for row in self.interval.rows:

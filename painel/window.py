@@ -452,18 +452,27 @@ class Window(Adw.ApplicationWindow):
         self.pages[group].add_slot(ident, Slot(card))
         self._apply_sort(group)
 
+    def _others_load(self, exclude=None):
+        """(github_repos, interval) of the groups that refresh alongside the one being edited: every other group,
+        but only with 'Refresh groups out of focus' on (otherwise just the visible group refreshes)."""
+        if not self.settings.get_boolean('refresh-all-groups'):
+            return []
+        default = self.settings.get_int('refresh-seconds')
+        return [(sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups.repos(g)),
+                 self.intervals.effective(g, default)) for g in self.groups.names() if g != exclude]
+
     def ask_group_settings(self, *_):
         group, current = self._selected_group(), self.intervals.get(self._selected_group())
         github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups.repos(group))
         rows = IntervalRows(self.settings.get_int('refresh-seconds'), current, github,
-                            bool(self.tokens.get(repo_id.GITHUB_HOST)))
+                            bool(self.tokens.get(repo_id.GITHUB_HOST)), self._others_load(exclude=group))
         GroupSettingsDialog(group, rows, current, lambda seconds: (self.intervals.set(group, seconds),
                                                                    self.restart_timers())).present(self)
 
     # --- import from an account ---
     def ask_import(self, *_):
         ImportDialog(self.settings, self.tokens, self.service, self.pool.submit, self.groups.all_repos,
-                     self._confirm_import).present(self)
+                     self._confirm_import, self._others_load()).present(self)
 
     def _confirm_import(self, host, account, chosen, kinds, listed, interval):
         if self.settings.get_boolean('sync-asked'):
