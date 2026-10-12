@@ -25,6 +25,9 @@ class ServiceTest(unittest.TestCase):
     def test_error_keeps_repo_path_as_name(self):
         self.assertEqual(self.fetch(HttpError(404)).name, 'o/r')
 
+    def test_review_requests_failure_is_empty(self):
+        self.assertEqual(StatusService(FakeHttp(error=HttpError(403))).review_requests('github.com', 'tok'), set())
+
     def test_unknown_host(self):
         self.assertIn('Unsupported', self.fetch(None, 'example.com/a/b').error)
 

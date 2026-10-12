@@ -24,6 +24,7 @@ class RepoStatus:
     release: Optional[str] = None                   # latest release tag
     released_at: Optional[str] = None               # ISO time of that release
     pushed_at: Optional[str] = None                 # ISO time of the last push
+    review_requested: bool = False                  # an open PR/MR asks for my review (set by Window, review_requests.py)
 
 
 RepoInfo = namedtuple('RepoInfo', 'path fork archived private')  # one entry of an account's repository listing
