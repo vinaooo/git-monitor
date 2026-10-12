@@ -1,6 +1,6 @@
 import threading
 
-from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 
 from . import repo_id
 from .card import Card
@@ -11,6 +11,10 @@ from .motion import Slot
 from .prefs import Prefs
 from .sorting import sorted_order
 from .titles import TitleStore
+
+# group severity -> (icon, tooltip): a word-or-glyph twin of the colour tint
+_HEALTH_GLYPH = {'error': ('dialog-error-symbolic', 'Failing'), 'warning': ('dialog-warning-symbolic', 'Needs attention'),
+                 'accent': ('emblem-synchronizing-symbolic', 'In progress'), 'success': ('object-select-symbolic', 'All good')}
 
 
 class Window(Adw.ApplicationWindow):
@@ -159,7 +163,8 @@ class Window(Adw.ApplicationWindow):
 
         def setup(_f, item):
             row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
-            row.append(Gtk.Label(xalign=0, hexpand=True))
+            row.append(Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END))
+            row.append(Gtk.Image(visible=False))  # health glyph: the tint alone would be colour-only
             drop = Gtk.DropTarget.new(GObject.TYPE_VARIANT, Gdk.DragAction.MOVE)
             drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident.unpack()))
             row.add_controller(drop)
@@ -170,7 +175,12 @@ class Window(Adw.ApplicationWindow):
 
         def bind(_f, item):
             page, row = item.get_item(), item.get_child()
-            item.bindings = [page.bind_property('title', row.get_first_child(), 'label', GObject.BindingFlags.SYNC_CREATE)]
+            label, glyph = row.get_first_child(), row.get_last_child()
+            sync = GObject.BindingFlags.SYNC_CREATE
+            item.bindings = [page.bind_property('title', label, 'label', sync),
+                             page.bind_property('indicator-icon', glyph, 'gicon', sync),
+                             page.bind_property('indicator-icon', glyph, 'visible', sync, lambda _b, icon: icon is not None),
+                             page.bind_property('tooltip', glyph, 'tooltip-text', sync)]
             def tint(*_):
                 if row.get_parent():  # the ListView row widget; not parented yet while binding
                     self._set_tint(row.get_parent(), page.get_keyword())
@@ -244,6 +254,9 @@ class Window(Adw.ApplicationWindow):
             ready = sum((c.status.pr_counts or {}).get('approved', 0) for c in cards if c.status) if every else 0
             tab = self.tab_view.get_page(page)
             tab.set_keyword(sev)  # carries the severity: sidebar rows follow its notify
+            icon, text = _HEALTH_GLYPH.get(sev, (None, ''))  # shown by tabs and sidebar rows alike
+            tab.set_indicator_icon(icon and Gio.ThemedIcon.new(icon))
+            tab.set_tooltip(text)
             tab.set_title(f'{name}  ● {ready}' if ready else name)  # ● N = approved PRs/MRs ready to merge
         self._tint_tabs()
 
