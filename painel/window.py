@@ -1,3 +1,4 @@
+import dataclasses
 import os
 from concurrent.futures import ThreadPoolExecutor
 
@@ -47,6 +48,7 @@ class Window(Adw.ApplicationWindow):
             settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
         self.connect('close-request', self._on_close_request)
         self.query, self.results_scheduled = '', 0
+        self.review_sets = {}  # host -> lowercase repo paths with a PR/MR asking for my review
         self.vpages, self.mirrors, self.virtual_active, self.virtual_scheduled = {}, {}, False, 0  # virtual groups
         self.cards, self.pages, self.timers = {}, {}, {}  # timers: group -> its refresh source
         self.fast, self.paces, self.slow, self.last = {}, {}, {}, {}  # group -> fast-lane source / Pace / delay; repo -> last RepoStatus
@@ -548,10 +550,26 @@ class Window(Adw.ApplicationWindow):
         page.add_slot(ident, Slot(card))
         return card
 
+    def _flagged(self, ident, status):
+        """`status` with review_requested set from the last per-host search (None stays None: not fetched yet)."""
+        host, _, path = ident.partition('/')
+        if status is None or path.lower() not in self.review_sets.get(host, ()):
+            return status
+        return dataclasses.replace(status, review_requested=True)
+
+    def _reviews(self, host, token):
+        found = self.service.review_requests(host, token)
+        GLib.idle_add(self._set_reviews, host, found)
+
+    def _set_reviews(self, host, found):
+        if found != self.review_sets.get(host, set()):
+            self.review_sets[host] = found
+            self._schedule_virtual()
+
     def _sync_virtual(self):
         self.virtual_scheduled = 0
         disabled = set(self.settings.get_strv('virtual-disabled'))
-        items = [(i, self.cards[i].status) for g in self.groups.names() for i in self.groups.repos(g) if i in self.cards]
+        items = [(i, self._flagged(i, self.cards[i].status)) for g in self.groups.names() for i in self.groups.repos(g) if i in self.cards]
         by_id = {d.id: members(d, items) for d in DEFINITIONS}
         show = shown(disabled, by_id)
         mode, reverse = self.settings.get_string('sort'), self.settings.get_boolean('sort-reverse')
@@ -992,6 +1010,10 @@ class Window(Adw.ApplicationWindow):
             host = repo_id.host_of(name)
             if host not in tokens:
                 tokens[host], waits[host] = self.tokens.get(host), self.service.wait(host)
+                if tokens[host] and not waits[host] and repo_id.kind(host) in ('github', 'gitlab'):
+                    self.pool.submit(self._reviews, host, tokens[host])  # one search per host and pass
+                elif not tokens[host] and self.review_sets.get(host):
+                    self._set_reviews(host, set())  # token removed: the group empties
             if waits[host] > 0:
                 until = GLib.DateTime.new_now_local().add_seconds(waits[host]).format('%H:%M')
                 self.window_title.set_subtitle(f'{host} asked us to wait, resuming {until}')

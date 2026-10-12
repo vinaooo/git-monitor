@@ -35,6 +35,11 @@ class VirtualTest(unittest.TestCase):
         self.assertTrue(BY_ID['errors'].match(i, st(error='boom')))
         self.assertFalse(BY_ID['ready'].match(i, st(pr_counts={'waiting': 1})))
 
+    def test_review_needs_flag(self):
+        self.assertTrue(BY_ID['review'].match('github.com/o/r', st(review_requested=True)))
+        self.assertFalse(BY_ID['review'].match('github.com/o/r', st()))
+        self.assertFalse(BY_ID['review'].match('github.com/o/r', None))
+
     def test_members_keep_order(self):
         items = [('github.com/a/1', None), ('gitlab.com/g/2', None), ('github.com/a/3', None)]
         self.assertEqual(members(BY_ID['github'], items), ['github.com/a/1', 'github.com/a/3'])

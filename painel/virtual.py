@@ -25,6 +25,8 @@ DEFINITIONS = (
                lambda i, s: _count(s, 'ci_counts', 'failure')),
     Definition('attention', 'PRs need attention', 'Changes requested, failing checks or conflicts', 'dialog-warning-symbolic',
                lambda i, s: _count(s, 'pr_counts', 'changes', 'failing', 'conflict')),
+    Definition('review', 'Review requested', 'PRs/MRs waiting for my review', 'mail-unread-symbolic',
+               lambda i, s: bool(s and s.review_requested)),
     Definition('waiting', 'Waiting for review', 'PRs/MRs waiting for a review', 'content-loading-symbolic',
                lambda i, s: _count(s, 'pr_counts', 'waiting')),
     Definition('errors', 'Fetch errors', 'The last refresh failed', 'network-error-symbolic',
@@ -35,7 +37,7 @@ DEFINITIONS = (
 # sidebar sections: (id, title, virtual group ids); every definition belongs to exactly one
 CATEGORIES = (
     ('services', 'Services', ('github', 'gitlab', 'forgejo')),
-    ('prs', 'PR/MR', ('ready', 'attention', 'waiting')),
+    ('prs', 'PR/MR', ('ready', 'attention', 'review', 'waiting')),
     ('ci', 'CI & errors', ('ci-failing', 'cancelled', 'errors')),
 )
 

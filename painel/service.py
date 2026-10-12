@@ -2,6 +2,7 @@ from .forgejo import ForgejoProvider
 from .github import BATCH, GitHubProvider
 from .gitlab import GitLabProvider
 from .http import HttpError, NetworkError
+from .review_requests import ReviewRequests
 from .repo_id import GITHUB_HOST, is_forgejo_host, is_gitlab_host
 from .status import RepoStatus
 
@@ -26,6 +27,7 @@ class StatusService:
     def __init__(self, http, signals=frozenset):
         """`signals`: callable -> enabled optional card signals, read on every request so toggles apply at once."""
         self.http, self.signals, self.unavailable = http, signals, set()
+        self._reviews = ReviewRequests(http)
 
     def _github(self):
         return GitHubProvider(self.http, self.signals(), self.unavailable)
@@ -62,6 +64,13 @@ class StatusService:
             return provider.fetch(path, token, head) if head else provider.fetch(path, token)
         except _FAILURES as e:
             return RepoStatus(name=path, error=_message(e))
+
+    def review_requests(self, host, token):
+        """Lowercase repo paths on `host` with a PR/MR asking for my review; failures are not errors: empty set."""
+        try:
+            return self._reviews.paths(host, token)
+        except _FAILURES:
+            return set()
 
     def wait(self, host):
         """Seconds the server asked us to stay away from `host` (Retry-After, exhausted quota); 0 = go ahead."""
