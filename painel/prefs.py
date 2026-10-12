@@ -3,6 +3,7 @@ from gi.repository import Adw, Gtk
 from . import repo_id
 from .tokens import TokenStoreError
 from .rate_limit import LIMITS, github_load, usage_text
+from .notify import KINDS
 from .virtual import DEFINITIONS
 
 
@@ -33,6 +34,19 @@ class Prefs(Adw.PreferencesDialog):
             row = Adw.SwitchRow(title=title, subtitle=subtitle)
             settings.bind(key, row, 'active', 0)
             look.add(row)
+
+        notes = Adw.PreferencesGroup(title='Notifications', description='Desktop notifications when a repository\u2019s CI '
+                                     'state changes, including changes that happened while the app was closed. '
+                                     'Mute single groups in Group settings.')
+        page.add(notes)
+        master = Adw.SwitchRow(title='CI notifications')
+        settings.bind('notify-ci', master, 'active', 0)
+        notes.add(master)
+        for kind, title in zip(KINDS, ('Failures', 'Recoveries', 'Running pipeline fails')):
+            row = Adw.SwitchRow(title=title, active=kind in settings.get_strv('notify-kinds'))
+            row.connect('notify::active', lambda r, _p, k=kind: self._toggle_kind(settings, k, r.get_active()))
+            master.bind_property('active', row, 'sensitive', 2)  # SYNC_CREATE
+            notes.add(row)
 
         virtual = Adw.PreferencesGroup(title='Virtual groups', description='Read-only groups in the sidebar that collect '
                                        'matching repositories from every group. Status-based ones only see repositories '
@@ -67,6 +81,11 @@ class Prefs(Adw.PreferencesDialog):
         self.rows['github.com'].connect('changed', lambda *_: self._update_warning())
         self._update_warning()
         self.connect('closed', lambda *_: self._save())
+
+    @staticmethod
+    def _toggle_kind(settings, kind, on):
+        kept = [k for k in settings.get_strv('notify-kinds') if k != kind]
+        settings.set_strv('notify-kinds', [*kept, kind] if on else kept)
 
     @staticmethod
     def _toggle_virtual(settings, vid, on):
