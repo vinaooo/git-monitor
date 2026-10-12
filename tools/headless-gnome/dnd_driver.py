@@ -28,7 +28,10 @@ if variant == 'zero':      # old behaviour: hotspot (0, 0)
 class T:
     def get(self, h): return None
 class Svc:
-    def fetch(self, i, t):
+    def wait(self, host): return 0
+    def batch_size(self, host, token): return 0
+    def not_modified_ratio(self): return 0.0
+    def fetch(self, i, t, head=None):
         Z = dict(failure=0, running=0, cancelled=0, success=3); P = dict(changes=0, failing=0, conflict=0, waiting=4, approved=1, draft=0)
         return RepoStatus(name=i.split('/')[-1], issues=1, prs=5, ci='success', ci_counts=Z, pr_counts=P, url='https://github.com/o/r')
 app = Adw.Application(); app.menu = Gio.Menu()
