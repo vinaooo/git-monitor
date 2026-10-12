@@ -2,11 +2,11 @@ from gi.repository import Adw, Gtk
 
 from . import repo_id
 from .tokens import TokenStoreError
-from .rate_limit import github_warning
+from .rate_limit import github_warning_groups
 
 
 class Prefs(Adw.PreferencesDialog):
-    def __init__(self, settings, tokens, repos, on_error, active=None):
+    def __init__(self, settings, tokens, repos, on_error, groups=None, selected=None, custom=None):
         super().__init__(title='Preferences')
         page, group = Adw.PreferencesPage(), Adw.PreferencesGroup(title='Refresh')
         page.add(group)
@@ -16,7 +16,8 @@ class Prefs(Adw.PreferencesDialog):
         interval.set_title('Refresh interval (seconds)')
         settings.bind('refresh-seconds', interval, 'value', 0)
         group.add(interval)
-        self.interval, self.all_repos, self.active = interval, list(repos), list(repos if active is None else active)
+        # rate-limit estimate inputs: repos per group, the visible group, groups with their own interval
+        self.interval, self.groups, self.selected, self.custom = interval, groups or {}, selected, custom or {}
         every = Adw.SwitchRow(title='Refresh groups out of focus',
                               subtitle='Also update groups you are not viewing. Uses more API requests.')
         settings.bind('refresh-all-groups', every, 'active', 0)
@@ -68,9 +69,11 @@ class Prefs(Adw.PreferencesDialog):
                 self.on_error(f'Could not save {host} token securely (keyring unavailable)')
 
     def _update_warning(self):
-        refreshed = self.all_repos if self.every.get_active() else self.active  # repos hit each cycle
-        github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in refreshed)
+        names = list(self.groups) if self.every.get_active() else [n for n in [self.selected] if n in self.groups]
+        default = self.interval.get_value()  # groups with a custom interval keep it
+        load = [(sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups[n]), self.custom.get(n, default))
+                for n in names]
         has_token = bool(self.rows[repo_id.GITHUB_HOST].get_text().strip())
-        warning = github_warning(self.interval.get_value(), github, has_token)
+        warning = github_warning_groups(load, has_token)
         self.interval.set_subtitle(warning or '')
         (self.interval.add_css_class if warning else self.interval.remove_css_class)('warning')

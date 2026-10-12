@@ -9,6 +9,7 @@ from . import importer
 from .groups import Groups
 from .health import group_severity, severity
 from .import_dialog import ImportDialog
+from .intervals import IntervalStore
 from .motion import Slot
 from .prefs import Prefs
 from .status import RepoStatus
@@ -33,7 +34,7 @@ class Window(Adw.ApplicationWindow):
         for key, prop in (('window-width', 'default-width'), ('window-height', 'default-height'),
                           ('window-maximized', 'maximized')):
             settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
-        self.cards, self.pages, self.timer = {}, {}, 0
+        self.cards, self.pages, self.timers = {}, {}, []  # timers: one refresh source per group
         self.pending, self.inflight, self.marks_scheduled = 0, set(), 0
         self.group_marks, self.sidebar_marks = {}, {}  # group name -> [severity]; TabPage -> its sidebar marks box
         self.tab_marks, self.tab_widgets = {}, {}  # TabPage -> marks box overlaid on the tab bar; TabPage -> its AdwTab
@@ -42,6 +43,8 @@ class Window(Adw.ApplicationWindow):
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
         self.sources = SourceStore(settings.get_value('sources').unpack(),
                                    lambda s: settings.set_value('sources', GLib.Variant('a(sssasas)', s)))
+        self.intervals = IntervalStore(settings.get_value('group-intervals').unpack(),
+                                       lambda d: settings.set_value('group-intervals', GLib.Variant('a{si}', d)))
         initial = settings.get_value('groups').unpack()
         self.groups = Groups(initial, lambda g: settings.set_value('groups', GLib.Variant('a(sas)', g)),
                              legacy_repos=[repo_id.migrate(r) for r in settings.get_strv('repos')])
@@ -60,8 +63,8 @@ class Window(Adw.ApplicationWindow):
         self._update_actions()
         self.refresh()
         self.tab_view.connect('notify::selected-page', lambda *_: self._on_group_focused())
-        self.restart_timer()
-        settings.connect('changed::refresh-seconds', lambda *_: self.restart_timer())
+        self.restart_timers()
+        settings.connect('changed::refresh-seconds', lambda *_: self.restart_timers())
         settings.connect('changed::sync-imported', lambda *_: self._sync_sources())
         GLib.timeout_add_seconds(5, lambda: self._sync_sources() or GLib.SOURCE_REMOVE)  # not on the startup path
         GLib.timeout_add_seconds(SYNC_SECONDS, lambda: self._sync_sources() or GLib.SOURCE_CONTINUE)
@@ -384,6 +387,7 @@ class Window(Adw.ApplicationWindow):
             self.toasts.add_toast(Adw.Toast(title='Invalid or duplicate group name'))
             return
         self.tab_view.set_selected_page(self._tab_page_of(self._make_page(name)))
+        self.restart_timers()
 
     def _tab_page_of(self, page):
         return self.tab_view.get_page(page)
@@ -399,6 +403,7 @@ class Window(Adw.ApplicationWindow):
                 self.toasts.add_toast(Adw.Toast(title='Invalid or duplicate group name'))
             return
         self.sources.rename_group(old, new)
+        self.intervals.rename_group(old, new)
         page = self.pages.pop(old)
         page.name = new
         self.pages[new] = page
@@ -429,7 +434,9 @@ class Window(Adw.ApplicationWindow):
             self._drop_repo(repo)  # the whole group was confirmed: no per-repo undo
         self.groups.remove(name)
         self.sources.remove_group(name)
+        self.intervals.remove_group(name)
         self.pages.pop(name)
+        self.restart_timers()
         self.tab_view.close_page_finish(tab_page, True)
 
     # --- repos ---
@@ -600,23 +607,33 @@ class Window(Adw.ApplicationWindow):
             page.drag_finished()
 
     # --- refresh ---
-    def restart_timer(self):
-        if self.timer:
-            GLib.source_remove(self.timer)
-        self.timer = GLib.timeout_add_seconds(self.settings.get_int('refresh-seconds'),
-                                              lambda: self.refresh() or True)
+    def restart_timers(self):
+        """One timer per group at its own interval (the global one unless the group has a custom one)."""
+        for source in self.timers:
+            GLib.source_remove(source)
+        default = self.settings.get_int('refresh-seconds')
+        self.timers = [GLib.timeout_add_seconds(self.intervals.effective(group, default), self._tick, group)
+                       for group in self.groups.names()]
+
+    def _tick(self, group):
+        if group not in self.pages:  # renamed or deleted: restart_timers replaced this source already
+            return GLib.SOURCE_REMOVE
+        if self.settings.get_boolean('refresh-all-groups') or group == self._selected_group():
+            self.refresh([group])
+        return GLib.SOURCE_CONTINUE
 
     def _on_group_focused(self):
         if not self.settings.get_boolean('refresh-all-groups'):  # otherwise it is already fresh
             self.refresh()  # new tab: refresh at once
 
-    def refresh(self):
+    def refresh(self, groups=None):
+        """Refresh `groups`; by default only the visible group (saves API quota), or all with the preference."""
         if not self.tab_view.get_selected_page():
             return
         tokens = {}
-        # default: only the visible group (saves API quota); the preference widens it to every group
-        names = self.groups.all_repos() if self.settings.get_boolean('refresh-all-groups') \
-            else self.groups.repos(self._selected_group())
+        if groups is None:
+            groups = self.groups.names() if self.settings.get_boolean('refresh-all-groups') else [self._selected_group()]
+        names = [name for group in groups for name in self.groups.repos(group)]
         for name in names:
             host = repo_id.host_of(name)
             if host not in tokens:
@@ -656,5 +673,6 @@ class Window(Adw.ApplicationWindow):
 
     def show_prefs(self):
         Prefs(self.settings, self.tokens, self.cards,
-              lambda msg: self.toasts.add_toast(Adw.Toast(title=msg)),
-              active=self.groups.repos(self._selected_group())).present(self)  # for the rate-limit estimate
+              lambda msg: self.toasts.add_toast(Adw.Toast(title=msg)),  # the rest feeds the rate-limit estimate
+              groups={g: self.groups.repos(g) for g in self.groups.names()}, selected=self._selected_group(),
+              custom={g: self.intervals.get(g) for g in self.groups.names() if self.intervals.get(g)}).present(self)
