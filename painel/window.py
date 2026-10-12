@@ -13,9 +13,12 @@ from .status import RepoStatus
 from .sorting import sorted_order
 from .titles import TitleStore
 
-# group severity -> (icon, tooltip): a word-or-glyph twin of the colour tint
-_HEALTH_GLYPH = {'error': ('dialog-error-symbolic', 'Failing'), 'warning': ('dialog-warning-symbolic', 'Needs attention'),
-                 'accent': ('emblem-synchronizing-symbolic', 'In progress'), 'success': ('object-select-symbolic', 'All good')}
+# group marks, worst first: severity -> (sidebar icon, tab glyph, tooltip). A group shows one per kind present, side
+# by side; shapes differ so state never rests on colour alone. "success" = something ready to merge / all green.
+_MARKS = {'error': ('dialog-error-symbolic', '✗', 'Failing'),
+          'warning': ('dialog-warning-symbolic', '⚠', 'Needs attention'),
+          'accent': ('emblem-synchronizing-symbolic', '●', 'In progress'),
+          'success': ('object-select-symbolic', '✓', 'Ready / all good')}
 
 
 class Window(Adw.ApplicationWindow):
@@ -27,6 +30,7 @@ class Window(Adw.ApplicationWindow):
             settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
         self.cards, self.pages, self.timer = {}, {}, 0
         self.pending, self.inflight, self.marks_scheduled = 0, set(), 0
+        self.group_marks, self.sidebar_marks = {}, {}  # group name -> [severity]; TabPage -> its sidebar marks box
         self.pool = ThreadPoolExecutor(max_workers=4)  # ponytail: fixed 4 workers, make it a setting if hosts rate-limit
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
@@ -49,7 +53,7 @@ class Window(Adw.ApplicationWindow):
         self.tab_view.connect('notify::selected-page', lambda *_: self._on_group_focused())
         self.restart_timer()
         settings.connect('changed::refresh-seconds', lambda *_: self.restart_timer())
-        settings.connect('changed::layout', lambda *_: self._apply_layout())
+        settings.connect('changed::layout', lambda *_: (self._apply_layout(), self._update_marks()))
         settings.connect('changed::view', lambda *_: self._apply_view())
         settings.connect('changed::refresh-all-groups', lambda *_: self._update_marks())
         for key in ('sort', 'sort-reverse'):
@@ -167,7 +171,7 @@ class Window(Adw.ApplicationWindow):
         def setup(_f, item):
             row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
             row.append(Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END))
-            row.append(Gtk.Image(visible=False))  # health glyph: the tint alone would be colour-only
+            row.append(Gtk.Box(spacing=4))  # group marks, filled by _update_marks: the tint alone would be colour-only
             drop = Gtk.DropTarget.new(GObject.TYPE_VARIANT, Gdk.DragAction.MOVE)
             drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident.unpack()))
             row.add_controller(drop)
@@ -178,12 +182,10 @@ class Window(Adw.ApplicationWindow):
 
         def bind(_f, item):
             page, row = item.get_item(), item.get_child()
-            label, glyph = row.get_first_child(), row.get_last_child()
-            sync = GObject.BindingFlags.SYNC_CREATE
-            item.bindings = [page.bind_property('title', label, 'label', sync),
-                             page.bind_property('indicator-icon', glyph, 'gicon', sync),
-                             page.bind_property('indicator-icon', glyph, 'visible', sync, lambda _b, icon: icon is not None),
-                             page.bind_property('tooltip', glyph, 'tooltip-text', sync)]
+            marks = row.get_last_child()
+            item.bindings = [page.bind_property('title', row.get_first_child(), 'label', GObject.BindingFlags.SYNC_CREATE)]
+            self.sidebar_marks[page] = marks
+            self._fill_marks(marks, self.group_marks.get(page.get_child().name, []))
             def tint(*_):
                 if row.get_parent():  # the ListView row widget; not parented yet while binding
                     self._set_tint(row.get_parent(), page.get_keyword())
@@ -193,6 +195,7 @@ class Window(Adw.ApplicationWindow):
 
         def unbind(_f, item):
             [b.unbind() for b in item.bindings]
+            self.sidebar_marks.pop(item.get_item(), None)
             item.get_item().disconnect(item.tint_handler)
 
         factory.connect('setup', setup)
@@ -249,18 +252,33 @@ class Window(Adw.ApplicationWindow):
         if sev and sev != 'none':
             widget.add_css_class(f'tint-{sev}')
 
+    @staticmethod
+    def _fill_marks(box, marks):
+        while child := box.get_first_child():
+            box.remove(child)
+        for sev in marks:
+            icon, _glyph, text = _MARKS[sev]
+            image = Gtk.Image(icon_name=icon, tooltip_text=text, css_classes=[sev])
+            image.update_property([Gtk.AccessibleProperty.LABEL], [text])
+            box.append(image)
+
     def _update_marks(self):
         every = self.settings.get_boolean('refresh-all-groups')
+        tabs = self.settings.get_string('layout') == 'tabs'
+        self.group_marks = {}
         for name, page in self.pages.items():
             cards = [self.cards[i] for i in self.groups.repos(name) if i in self.cards]
             sev = group_severity([severity(c.status) for c in cards]) if every else 'none'
-            ready = sum((c.status.pr_counts or {}).get('approved', 0) for c in cards if c.status) if every else 0
+            seen = {severity(c.status) for c in cards} if every else set()
+            ready = any((c.status.pr_counts or {}).get('approved') for c in cards if c.status) if every else False
+            marks = [m for m in ('error', 'warning', 'accent') if m in seen] + (['success'] if 'success' in seen or ready else [])
+            self.group_marks[name] = marks
             tab = self.tab_view.get_page(page)
             tab.set_keyword(sev)  # carries the severity: sidebar rows follow its notify
-            icon, text = _HEALTH_GLYPH.get(sev, (None, ''))  # shown by tabs and sidebar rows alike
-            tab.set_indicator_icon(icon and Gio.ThemedIcon.new(icon))
-            tab.set_tooltip(text)
-            tab.set_title(f'{name}  ● {ready}' if ready else name)  # ● N = approved PRs/MRs ready to merge
+            tab.set_title(f'{name}  {" ".join(_MARKS[m][1] for m in marks)}' if tabs and marks else name)
+            tab.set_tooltip(', '.join(_MARKS[m][2] for m in marks))
+            if (box := self.sidebar_marks.get(tab)):
+                self._fill_marks(box, marks)
         self._tint_tabs()
 
     def _tint_tabs(self):
