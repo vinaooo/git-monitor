@@ -186,7 +186,7 @@ class Window(Adw.ApplicationWindow):
         self.virtual_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, visible=False)
         self.virtual_section.append(Gtk.Separator())
         self.virtual_section.append(Gtk.ScrolledWindow(child=self.virtual_box, propagate_natural_height=True,
-                                                       max_content_height=300, hscrollbar_policy=Gtk.PolicyType.NEVER))
+                                                       max_content_height=520, hscrollbar_policy=Gtk.PolicyType.NEVER))
         sidebar.append(self.virtual_section)
         new_group = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='New group', halign=Gtk.Align.END,
                                margin_top=6, margin_bottom=6, margin_end=6, css_classes=['flat'])
