@@ -28,7 +28,7 @@ class TokenStore:
         try:
             if token:
                 Secret.password_store_sync(_SCHEMA, {'host': host}, Secret.COLLECTION_DEFAULT,
-                                           f'Painel token for {host}', token, None)
+                                           f'Git Monitor token for {host}', token, None)
             else:
                 Secret.password_clear_sync(_SCHEMA, {'host': host}, None)
         except GLib.Error as e:

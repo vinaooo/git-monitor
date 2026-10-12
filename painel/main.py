@@ -30,7 +30,7 @@ class App(Adw.Application):
         self.service, self.tokens = StatusService(UrllibClient()), TokenStore()
         self.menu = Gio.Menu()
         for items in ((('Preferences', 'app.prefs'), ('Keyboard Shortcuts', 'app.shortcuts')),
-                      (('About Painel', 'app.about'), ('Quit', 'app.quit'))):
+                      (('About Git Monitor', 'app.about'), ('Quit', 'app.quit'))):
             section = Gio.Menu()
             for label, action in items:
                 section.append(label, action)
@@ -60,10 +60,10 @@ class App(Adw.Application):
         dialog.present(self.props.active_window)
 
     def about(self, *_):
-        Adw.AboutDialog(application_name='Painel', application_icon=APP_ID, version='0.1.0',
+        Adw.AboutDialog(application_name='Git Monitor', application_icon=APP_ID, version='0.1.0',
                         comments='Monitor GitHub and GitLab repositories',
-                        developer_name='Vinicius Pedrinho', website='https://github.com/vinaooo/painel',
-                        issue_url='https://github.com/vinaooo/painel/issues',
+                        developer_name='Vinicius Pedrinho', website='https://github.com/vinaooo/git-monitor',
+                        issue_url='https://github.com/vinaooo/git-monitor/issues',
                         license_type=Gtk.License.MIT_X11).present(self.props.active_window)
 
 

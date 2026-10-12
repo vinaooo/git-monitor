@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Painel: GNOME/GTK4 + libadwaita app (Python/PyGObject, meson, Flatpak) showing one card per GitHub/GitLab repo: open issues, pending PRs/MRs, CI state, open-in-browser. No third-party Python deps (stdlib `urllib` only).
+Git Monitor (code name and package: `painel`; app ID `io.github.vina.Painel`): GNOME/GTK4 + libadwaita app (Python/PyGObject, meson, Flatpak) showing one card per GitHub/GitLab repo: open issues, pending PRs/MRs, CI state, open-in-browser. No third-party Python deps (stdlib `urllib` only).
 
 ## Commands
 
