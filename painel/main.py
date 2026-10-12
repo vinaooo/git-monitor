@@ -8,7 +8,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Adw, Gio, GLib, Gtk
 
 from . import background, search_provider, style
-from .http import UrllibClient
+from .http import CachingClient, UrllibClient
 from .service import StatusService
 from .tokens import TokenStore
 from .window import Window
@@ -27,7 +27,7 @@ class App(Adw.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID)
         self.settings = Gio.Settings.new(APP_ID)
-        self.service, self.tokens = StatusService(UrllibClient()), TokenStore()
+        self.service, self.tokens = StatusService(CachingClient(UrllibClient())), TokenStore()
         self.menu = Gio.Menu()
         for items in ((('Preferences', 'app.prefs'), ('Keyboard Shortcuts', 'app.shortcuts')),
                       (('About Git Monitor', 'app.about'), ('Quit', 'app.quit'))):

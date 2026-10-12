@@ -8,7 +8,7 @@ from .virtual import DEFINITIONS
 
 
 class Prefs(Adw.PreferencesDialog):
-    def __init__(self, settings, tokens, repos, on_error, groups=None, selected=None, custom=None):
+    def __init__(self, settings, tokens, repos, on_error, groups=None, selected=None, custom=None, ratio=0.0):
         super().__init__(title='Preferences')
         page, group = Adw.PreferencesPage(), Adw.PreferencesGroup(title='Refresh')
         page.add(group)
@@ -20,6 +20,7 @@ class Prefs(Adw.PreferencesDialog):
         group.add(interval)
         # rate-limit estimate inputs: repos per group, the visible group, groups with their own interval
         self.interval, self.groups, self.selected, self.custom = interval, groups or {}, selected, custom or {}
+        self.ratio = ratio  # share of requests answered by 304 (free on GitHub)
         every = Adw.SwitchRow(title='Refresh groups out of focus',
                               subtitle='Also update groups you are not viewing. Uses more API requests.')
         settings.bind('refresh-all-groups', every, 'active', 0)
@@ -115,7 +116,8 @@ class Prefs(Adw.PreferencesDialog):
         load = [(sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups[n]), self.custom.get(n, default))
                 for n in names]
         has_token = bool(self.rows[repo_id.GITHUB_HOST].get_text().strip())
-        per_hour = github_load(load, has_token)
+        per_hour = github_load(load, has_token, self.ratio)
         over = per_hour > LIMITS[has_token]
-        self.interval.set_subtitle(usage_text(per_hour, has_token) + (' Add a token to raise it.' if over and not has_token else ''))
+        self.interval.set_subtitle(usage_text(per_hour, has_token, github_load(load, has_token))
+                                   + (' Add a token to raise it.' if over and not has_token else ''))
         (self.interval.add_css_class if over else self.interval.remove_css_class)('warning')

@@ -129,3 +129,51 @@ class GitHubListTest(unittest.TestCase):
     def test_other_http_errors_propagate(self):
         with self.assertRaises(HttpError):
             self.list({'/orgs/acme/repos': HttpError(403), '/user': ({'login': 'me'}, {})}, account='acme', token='tok')
+
+
+def gql_repo(name='O/r', issues=7, prs=(), branch='main'):
+    return {'nameWithOwner': name, 'url': f'https://github.com/{name}', 'issues': {'totalCount': issues},
+            'defaultBranchRef': {'name': branch} if branch else None,
+            'pullRequests': {'totalCount': len(prs), 'nodes': list(prs)}}
+
+
+class GitHubBatchTest(unittest.TestCase):
+    def heads(self, data, paths=('o/r', 'o/s'), token='tok'):
+        http = FakeHttp({'/graphql': ({'data': data}, {})})
+        return GitHubProvider(http).heads(list(paths), token), http
+
+    def test_one_query_for_all_repos_with_variables_not_interpolation(self):
+        heads, http = self.heads({'r0': gql_repo(), 'r1': gql_repo('O/s')})
+        self.assertEqual(len(http.bodies), 1)
+        self.assertEqual(http.bodies[0]['variables'], {'o0': 'o', 'n0': 'r', 'o1': 'o', 'n1': 's'})
+        self.assertIn('r1: repository(owner: $o1, name: $n1)', http.bodies[0]['query'])
+        self.assertEqual(http.sent[0]['Authorization'], 'Bearer tok')
+        self.assertEqual((heads['o/r'].name, heads['o/s'].name), ('O/r', 'O/s'))
+
+    def test_head_carries_issues_prs_and_branch(self):
+        prs = [node(1, reviewDecision='APPROVED'), node(2, isDraft=True)]
+        heads, _ = self.heads({'r0': gql_repo(issues=4, prs=prs), 'r1': None})
+        h = heads['o/r']
+        self.assertEqual((h.issues, h.prs, h.branch, h.detail), (4, 2, 'main', True))
+        self.assertEqual((h.pr_counts['approved'], h.pr_counts['draft']), (1, 1))
+
+    def test_missing_or_empty_repos_are_none_so_the_caller_falls_back(self):
+        heads, _ = self.heads({'r0': None, 'r1': gql_repo(branch=None)})
+        self.assertEqual(heads, {'o/r': None, 'o/s': None})
+
+    def test_fetch_with_a_head_skips_the_repo_and_pr_calls(self):
+        heads, _ = self.heads({'r0': gql_repo(issues=4, prs=[node(1)]), 'r1': None})
+        http = FakeHttp(routes(runs=[wrun(1, 'completed', 'failure')], running=1))
+        s = GitHubProvider(http).fetch('o/r', 'tok', heads['o/r'])
+        self.assertEqual((s.name, s.url, s.issues, s.prs, s.ci), ('O/r', 'https://github.com/O/r', 4, 1, 'failure'))
+        self.assertTrue(s.pr_detail)
+        self.assertEqual(len(http.urls), 2)
+        self.assertTrue(all('/actions/runs' in u for u in http.urls))
+        self.assertTrue(any('branch=main' in u for u in http.urls))
+
+    def test_batch_status_equals_the_per_repo_status(self):
+        gql = {'totalCount': 1, 'nodes': [node(1, reviewDecision='APPROVED')]}
+        alone = GitHubProvider(FakeHttp(routes(graphql=gql))).fetch('o/r', 'tok')
+        heads, _ = self.heads({'r0': gql_repo(issues=10 - 1, prs=gql['nodes']), 'r1': None})
+        batched = GitHubProvider(FakeHttp(routes())).fetch('o/r', 'tok', heads['o/r'])
+        self.assertEqual(alone, batched)

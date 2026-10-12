@@ -1,6 +1,6 @@
 import unittest
 
-from painel.http import HttpError, NetworkError
+from painel.http import CachingClient, HttpError, NetworkError, RateState
 from painel.service import StatusService
 from tests.fakes import FakeHttp
 
@@ -58,3 +58,43 @@ class SecretHygieneTest(unittest.TestCase):
         http = FakeHttp(error=HttpError(404))
         StatusService(http).fetch('gitlab.example.org/a/b', 'tok')
         self.assertTrue(all(u.startswith('https://gitlab.example.org/') for u in http.urls))
+
+
+class BatchTest(unittest.TestCase):
+    def gql(self):
+        r = {'nameWithOwner': 'o/r', 'url': 'u', 'issues': {'totalCount': 1}, 'defaultBranchRef': {'name': 'main'},
+             'pullRequests': {'totalCount': 0, 'nodes': []}}
+        return FakeHttp({'/graphql': ({'data': {'r0': r}}, {})})
+
+    def test_batching_only_for_github_with_a_token(self):
+        svc = StatusService(FakeHttp())
+        self.assertEqual(svc.batch_size('github.com', 'tok'), 10)
+        self.assertEqual(svc.batch_size('github.com', None), 0)
+        self.assertEqual(svc.batch_size('gitlab.com', 'tok'), 0)
+
+    def test_heads_keyed_by_ident(self):
+        heads = StatusService(self.gql()).heads(['github.com/o/r'], 'tok')
+        self.assertEqual(heads['github.com/o/r'].branch, 'main')
+
+    def test_failed_batch_is_empty_so_every_repo_falls_back(self):
+        self.assertEqual(StatusService(FakeHttp(error=HttpError(502))).heads(['github.com/o/r'], 'tok'), {})
+        self.assertEqual(StatusService(FakeHttp({'/graphql': ({'data': None}, {})})).heads(['github.com/o/r'], 'tok'),
+                         {'github.com/o/r': None})
+
+    def test_fetch_uses_the_head(self):
+        http = FakeHttp({'/graphql': self.gql().routes['/graphql'], 'status=in_progress': ({'total_count': 0}, {}),
+                         'branch=main': ({'workflow_runs': []}, {})})
+        svc = StatusService(http)
+        head = svc.heads(['github.com/o/r'], 'tok')['github.com/o/r']
+        self.assertEqual(svc.fetch('github.com/o/r', 'tok', head).name, 'o/r')
+        self.assertEqual(len([u for u in http.urls if '/graphql' not in u]), 2)
+
+    def test_wait_and_ratio_default_to_nothing_without_a_caching_client(self):
+        svc = StatusService(FakeHttp())
+        self.assertEqual((svc.wait('github.com'), svc.not_modified_ratio()), (0, 0.0))
+
+    def test_wait_and_ratio_come_from_the_caching_client(self):
+        client = CachingClient(FakeHttp(), RateState(clock=lambda: 10))
+        client.state.note('https://api.github.com/x', {'Retry-After': '30'})
+        svc = StatusService(client)
+        self.assertEqual(svc.wait('github.com'), 30)  # ident host -> API host

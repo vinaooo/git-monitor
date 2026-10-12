@@ -68,3 +68,26 @@ class UsageTest(unittest.TestCase):
 
     def test_text_shows_percentages_above_100(self):
         self.assertEqual(usage_text(15660, True), '~15660 of 5000 requests/hour (313%)')
+
+
+class NotModifiedTest(unittest.TestCase):
+    def test_304s_are_free_for_the_rest_calls(self):
+        # anonymous 304s still count (measured): the ratio changes nothing
+        self.assertEqual(github_load([(1, 3600)], False, 0.75), 4)
+        # token: 2 conditional REST calls + 1 GraphQL point that is never a 304
+        self.assertEqual(github_load([(1, 3600)], True, 0.5), 2)
+        self.assertEqual(github_load([(1, 3600)], True, 1.0), 1)
+
+    def test_default_is_the_worst_case(self):
+        self.assertEqual(github_load([(1, 3600)], False), 4)
+        self.assertEqual(github_load([(1, 3600)], True), 3)
+
+    def test_warning_and_suggestion_follow_the_ratio(self):
+        self.assertIsNotNone(github_warning(60, 1, False, 0.9))  # anonymous: 304s still count
+        self.assertEqual(min_interval(1, False, 0.75), 240)
+        self.assertIsNotNone(github_warning(15, 30, True, 0.5))  # 30 * 2 / 15 s = 7200/h
+        self.assertIsNone(github_warning(30, 30, True, 1.0))     # only the 30 GraphQL points: 3600/h
+
+    def test_usage_text_shows_worst_case_when_it_differs(self):
+        self.assertEqual(usage_text(30, False, worst=120), '~30 of 60 requests/hour (50%), worst case ~120')
+        self.assertEqual(usage_text(30, False, worst=30), '~30 of 60 requests/hour (50%)')
