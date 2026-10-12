@@ -1,6 +1,6 @@
 import unittest
 
-from painel.importer import group_name, plan, select
+from painel.importer import default_selection, group_name, plan, select, wanted
 from painel.status import RepoInfo
 
 A, FORK, OLD, PRIV = RepoInfo('me/a', False, False, False), RepoInfo('me/f', True, False, False), \
@@ -33,3 +33,21 @@ class PlanTest(unittest.TestCase):
 
     def test_nothing_selected(self):
         self.assertEqual(plan([], 'github.com', True, True, []), ([], 0))
+
+
+class WantedTest(unittest.TestCase):
+    def test_a_repo_must_pass_every_kind_it_belongs_to(self):
+        both = RepoInfo('me/x', True, True, False)
+        self.assertFalse(wanted(both, forks=True, archived=False))
+        self.assertFalse(wanted(both, forks=False, archived=True))
+        self.assertTrue(wanted(both, forks=True, archived=True))
+        self.assertTrue(wanted(A, forks=False, archived=False))
+
+
+class DefaultSelectionTest(unittest.TestCase):
+    def test_is_the_set_of_new_idents_the_plan_would_import(self):
+        picked = default_selection(ALL, 'github.com', False, False, ['github.com/me/a'])
+        self.assertEqual(picked, {'github.com/me/p'})
+
+    def test_tracked_repos_are_never_preselected(self):
+        self.assertEqual(default_selection([A], 'github.com', True, True, ['github.com/ME/A']), set())

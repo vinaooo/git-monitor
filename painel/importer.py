@@ -7,9 +7,13 @@ def group_name(account):
     return last[:1].upper() + last[1:]
 
 
+def wanted(info, forks, archived):
+    """Forks / archived repos only when asked for; everything else (public and private) is wanted."""
+    return (forks or not info.fork) and (archived or not info.archived)
+
+
 def select(infos, forks, archived):
-    """Keep forks / archived repos only when asked for; everything else (public and private) stays."""
-    return [i for i in infos if (forks or not i.fork) and (archived or not i.archived)]
+    return [i for i in infos if wanted(i, forks, archived)]
 
 
 def plan(infos, host, forks, archived, tracked):
@@ -18,3 +22,8 @@ def plan(infos, host, forks, archived, tracked):
     idents = [f'{host}/{i.path}' for i in select(infos, forks, archived)]
     new = [i for i in idents if i.lower() not in seen]
     return new, len(idents) - len(new)
+
+
+def default_selection(infos, host, forks, archived, tracked):
+    """Identities ticked in the picker before the user touches it: wanted kinds, not tracked yet."""
+    return set(plan(infos, host, forks, archived, tracked)[0])

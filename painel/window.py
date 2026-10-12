@@ -465,9 +465,9 @@ class Window(Adw.ApplicationWindow):
         ImportDialog(self.settings, self.tokens, self.service, self.pool.submit, self.groups.all_repos,
                      self._confirm_import).present(self)
 
-    def _confirm_import(self, host, account, new, kinds, listed):
+    def _confirm_import(self, host, account, chosen, kinds, listed, interval):
         if self.settings.get_boolean('sync-asked'):
-            self.import_account(host, account, new, kinds, listed)
+            self.import_account(host, account, chosen, kinds, listed, interval)
             return
         dlg = Adw.AlertDialog(heading='Keep this group in sync?',
                               body='Painel can add repositories this account creates later. You can change this in Preferences.')
@@ -479,12 +479,13 @@ class Window(Adw.ApplicationWindow):
         def answered(_dlg, response):
             self.settings.set_boolean('sync-imported', response == 'yes')
             self.settings.set_boolean('sync-asked', True)
-            self.import_account(host, account, new, kinds, listed)
+            self.import_account(host, account, chosen, kinds, listed, interval)
 
         dlg.connect('response', answered)
         dlg.present(self)
 
-    def import_account(self, host, account, new, kinds, listed):
+    def import_account(self, host, account, chosen, kinds, listed, interval=None):
+        """`listed` = every repo of the account (chosen or not) so sync never adds the ones skipped here."""
         wanted = importer.group_name(account)
         group = next((g for g in self.groups.names() if g.lower() == wanted.lower()), None)  # re-import adds to it
         if group:
@@ -492,12 +493,15 @@ class Window(Adw.ApplicationWindow):
         else:
             self.new_group(wanted)
             group = wanted
-        for ident in new:
+        for ident in chosen:
             self.groups.add_repo(group, ident)
             self._add_card(ident, group)
         self.sources.add(group, host, account, kinds, listed)
+        if interval is not None:
+            self.intervals.set(group, interval)
+        self.restart_timers()
         self.refresh()
-        self.toasts.add_toast(Adw.Toast(title=f'Imported {len(new)} repositories into {group}'))
+        self.toasts.add_toast(Adw.Toast(title=f'Imported {len(chosen)} repositories into {group}'))
 
     def _sync_sources(self):
         """Add repositories an imported account created since the last listing (only with the preference on)."""
