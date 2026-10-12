@@ -1,6 +1,7 @@
 [Desktop Entry]
 Name=Painel
 Comment=Monitor GitHub and GitLab repositories
+Keywords=github;gitlab;ci;issues;pull requests;merge requests;
 Exec=painel
 Icon=io.github.vina.Painel
 Terminal=false

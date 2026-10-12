@@ -62,6 +62,8 @@ class App(Adw.Application):
     def about(self, *_):
         Adw.AboutDialog(application_name='Painel', application_icon=APP_ID, version='0.1.0',
                         comments='Monitor GitHub and GitLab repositories',
+                        developer_name='Vinicius Pedrinho', website='https://github.com/vinaooo/painel',
+                        issue_url='https://github.com/vinaooo/painel/issues',
                         license_type=Gtk.License.MIT_X11).present(self.props.active_window)
 
 
