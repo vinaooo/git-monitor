@@ -156,7 +156,7 @@ class Window(Adw.ApplicationWindow):
         self.split.connect('notify::collapsed', lambda *_: self._sync_toggle())
 
     def _build_view_menu(self):
-        for key in ('sort', 'sort-reverse', 'view'):  # stateful actions backed by GSettings
+        for key in ('sort', 'sort-reverse', 'view', 'layout'):  # stateful actions backed by GSettings
             self.add_action(self.settings.create_action(key))
         menu = Gio.Menu()
         sort = Gio.Menu()
@@ -170,6 +170,10 @@ class Window(Adw.ApplicationWindow):
                             ('Large cards', 'grid-large'), ('List', 'list')):
             view.append(label, f'win.view::{mode}')
         menu.append_section('View', view)
+        groups = Gio.Menu()
+        for label, mode in (('Sidebar', 'sidebar'), ('Tabs', 'tabs')):
+            groups.append(label, f'win.layout::{mode}')
+        menu.append_section('Groups', groups)
         return menu
 
     def _build_sidebar(self):

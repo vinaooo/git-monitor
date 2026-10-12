@@ -16,10 +16,6 @@ class Prefs(Adw.PreferencesDialog):
         interval.set_title('Refresh interval (seconds)')
         settings.bind('refresh-seconds', interval, 'value', 0)
         group.add(interval)
-        layout = Adw.ComboRow(title='Group layout', model=Gtk.StringList.new(['Tabs', 'Sidebar']))
-        layout.set_selected(1 if settings.get_string('layout') == 'sidebar' else 0)
-        layout.connect('notify::selected', lambda r, _p: settings.set_string('layout', ('tabs', 'sidebar')[r.get_selected()]))
-        group.add(layout)
         self.interval, self.all_repos, self.active = interval, list(repos), list(repos if active is None else active)
         every = Adw.SwitchRow(title='Refresh groups out of focus',
                               subtitle='Also update groups you are not viewing. Uses more API requests.')
