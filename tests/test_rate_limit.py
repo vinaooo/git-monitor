@@ -1,6 +1,6 @@
 import unittest
 
-from painel.rate_limit import github_warning
+from painel.rate_limit import github_load, github_warning, github_warning_groups, min_interval, usage_text
 
 
 class RateLimitTest(unittest.TestCase):
@@ -20,3 +20,51 @@ class RateLimitTest(unittest.TestCase):
 
     def test_no_github_repos_no_warning(self):
         self.assertIsNone(github_warning(15, 0, False))
+
+
+class GroupsWarningTest(unittest.TestCase):
+    def test_sums_every_group_at_its_own_interval(self):
+        # 10*3*(3600/60) + 20*3*(3600/300) = 2520 requests/hour
+        self.assertIsNone(github_warning_groups([(10, 60), (20, 300)], True))
+        self.assertIn('~10800', github_warning_groups([(20, 30), (20, 60)], True))
+
+    def test_one_slow_group_does_not_hide_a_fast_one(self):
+        self.assertIn('5000', github_warning_groups([(87, 60), (1, 3600)], True))
+
+    def test_matches_the_single_group_form(self):
+        self.assertEqual(github_warning_groups([(30, 15)], True), github_warning(15, 30, True))
+
+
+class MinIntervalTest(unittest.TestCase):
+    def test_rounds_up_to_5_seconds(self):
+        self.assertEqual(min_interval(87, True), 190)  # 87*3*3600/5000 = 187.9
+
+    def test_never_below_15_seconds(self):
+        self.assertEqual(min_interval(1, True), 15)
+        self.assertEqual(min_interval(0, False), 15)
+
+    def test_anonymous_budget_is_much_smaller(self):
+        self.assertEqual(min_interval(1, False), 240)
+
+    def test_capped_at_an_hour(self):
+        self.assertEqual(min_interval(100, False), 3600)
+
+    def test_the_suggestion_fits_the_limit(self):
+        for repos in (1, 10, 87, 400):
+            self.assertIsNone(github_warning(min_interval(repos, True), repos, True), repos)
+
+
+class UsageTest(unittest.TestCase):
+    def test_load_sums_requests_per_hour(self):
+        self.assertEqual(github_load([(10, 60), (20, 300)], True), 2520)  # 10*3*60 + 20*3*12
+        self.assertEqual(github_load([], True), 0)
+
+    def test_text_always_names_the_limit_and_the_share_used(self):
+        self.assertEqual(usage_text(1800, True), '~1800 of 5000 requests/hour (36%)')
+        self.assertEqual(usage_text(0, True), '~0 of 5000 requests/hour (0%)')
+
+    def test_text_uses_the_anonymous_limit_without_a_token(self):
+        self.assertEqual(usage_text(30, False), '~30 of 60 requests/hour (50%)')
+
+    def test_text_shows_percentages_above_100(self):
+        self.assertEqual(usage_text(15660, True), '~15660 of 5000 requests/hour (313%)')

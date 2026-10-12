@@ -6,15 +6,20 @@ CSS = """
 .card.health-warning { box-shadow: inset 4px 0 0 @warning_color, 0 0 0 1px alpha(currentColor, .1); }
 .card.health-accent  { box-shadow: inset 4px 0 0 @blue_3, 0 0 0 1px alpha(currentColor, .1); }
 .card.health-success { box-shadow: inset 4px 0 0 @success_color, 0 0 0 1px alpha(currentColor, .1); }
-/* group health tint: whole tab / sidebar row, a light (white-mixed) translucent wash so the theme still shows through */
-tab.tint-error, row.tint-error       { background: alpha(mix(@error_color, white, .4), .30); }
-tab.tint-warning, row.tint-warning   { background: alpha(mix(@warning_color, white, .4), .30); }
-tab.tint-accent, row.tint-accent     { background: alpha(mix(@blue_3, white, .4), .32); }
-tab.tint-success, row.tint-success   { background: alpha(mix(@success_color, white, .4), .26); }
-tab.tint-error:selected, row.tint-error:selected       { background: alpha(mix(@error_color, white, .4), .50); }
-tab.tint-warning:selected, row.tint-warning:selected   { background: alpha(mix(@warning_color, white, .4), .50); }
-tab.tint-accent:selected, row.tint-accent:selected     { background: alpha(mix(@blue_3, white, .4), .52); }
-tab.tint-success:selected, row.tint-success:selected   { background: alpha(mix(@success_color, white, .4), .44); }
+window .card.search-hit { background-color: mix(@accent_bg_color, @card_bg_color, .65); background-image: none; box-shadow: 0 0 0 3px @accent_bg_color; }
+/* group health tint (only with the colored-tabs preference): whole tab / sidebar row, a light (white-mixed) translucent wash so the theme still shows through */
+window.colored-tabs tab.tint-error, window.colored-tabs row.tint-error       { background: alpha(mix(@error_color, white, .4), .30); }
+window.colored-tabs tab.tint-warning, window.colored-tabs row.tint-warning   { background: alpha(mix(@warning_color, white, .4), .30); }
+window.colored-tabs tab.tint-accent, window.colored-tabs row.tint-accent     { background: alpha(mix(@blue_3, white, .4), .32); }
+window.colored-tabs tab.tint-success, window.colored-tabs row.tint-success   { background: alpha(mix(@success_color, white, .4), .26); }
+window.colored-tabs tab.tint-error:selected, window.colored-tabs row.tint-error:selected       { background: alpha(mix(@error_color, white, .4), .50); }
+window.colored-tabs tab.tint-warning:selected, window.colored-tabs row.tint-warning:selected   { background: alpha(mix(@warning_color, white, .4), .50); }
+window.colored-tabs tab.tint-accent:selected, window.colored-tabs row.tint-accent:selected     { background: alpha(mix(@blue_3, white, .4), .52); }
+window.colored-tabs tab.tint-success:selected, window.colored-tabs row.tint-success:selected   { background: alpha(mix(@success_color, white, .4), .44); }
+window.colored-icons .mark-error   { color: @error_color; }
+window.colored-icons .mark-warning { color: @warning_color; }
+window.colored-icons .mark-accent  { color: @blue_3; }
+window.colored-icons .mark-success { color: @success_color; }
 .chip { padding: 1px 9px; border-radius: 99px; font-size: smaller; font-weight: 600; }
 button.chip { min-height: 0; min-width: 0; }
 .chip-link:hover { filter: brightness(1.25); }

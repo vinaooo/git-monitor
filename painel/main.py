@@ -15,9 +15,9 @@ from .window import Window
 
 APP_ID = 'io.github.vina.Painel'
 # action -> (accelerators, title shown in the shortcuts dialog)
-ACCELS = {'win.add-repo': ['<Ctrl>t'], 'win.new-group': ['<Ctrl>n'], 'win.refresh': ['<Ctrl>r', 'F5'],
+ACCELS = {'win.add-repo': ['<Ctrl>t'], 'win.new-group': ['<Ctrl>n'], 'win.refresh': ['<Ctrl>r', 'F5'], 'win.search': ['<Ctrl>f'],
           'app.prefs': ['<Ctrl>comma'], 'app.shortcuts': ['<Ctrl>question'], 'app.quit': ['<Ctrl>q']}
-SHORTCUTS = (('Repositories', (('Add repository', '<Ctrl>t'), ('Refresh', '<Ctrl>r F5'))),
+SHORTCUTS = (('Repositories', (('Add repository', '<Ctrl>t'), ('Refresh', '<Ctrl>r F5'), ('Search', '<Ctrl>f'))),
              ('Groups', (('New group', '<Ctrl>n'),)),
              ('General', (('Preferences', '<Ctrl>comma'), ('Keyboard shortcuts', '<Ctrl>question'),
                           ('Quit', '<Ctrl>q'))))

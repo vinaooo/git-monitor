@@ -14,7 +14,7 @@ class GroupPage(Gtk.Stack):
     def __init__(self, name, groups, can_reorder=lambda: True):
         super().__init__(transition_type=Gtk.StackTransitionType.CROSSFADE)
         self.name, self.groups, self.dragging, self.slots = name, groups, None, {}
-        self.can_reorder, self.compact = can_reorder, False
+        self.can_reorder, self.compact, self.pred = can_reorder, False, None  # pred: search filter on a Card
         self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, valign=Gtk.Align.START,
                                 min_children_per_line=1, max_children_per_line=4,
                                 homogeneous=True, margin_top=12, margin_bottom=12,
@@ -29,11 +29,37 @@ class GroupPage(Gtk.Stack):
         self.add_named(Adw.StatusPage(title='No Repositories', icon_name='io.github.vina.Painel-symbolic',
                                       description='Add a repository, or drag a card onto this group.',
                                       child=add), 'empty')
-        self.add_named(Gtk.ScrolledWindow(child=self.flow), 'list')
+        self.add_named(Adw.StatusPage(title='No Matches', icon_name='edit-find-symbolic',
+                                      description='No repository in this group matches the search.'), 'nomatch')
+        self.scroller = Gtk.ScrolledWindow(child=self.flow)
+        self.add_named(self.scroller, 'list')
         self._sync()
 
     def _sync(self):
-        self.set_visible_child_name('list' if self.slots else 'empty')
+        self.set_visible_child_name(('nomatch' if self.pred and not self.match_count() else 'list') if self.slots else 'empty')
+
+    def reveal(self, ident, done=lambda: None):
+        """Glide the scroll position so the card `ident` sits in the middle of the view; `done()` when it arrived."""
+        slot = self.slots.get(ident)
+        ok, bounds = slot.get_parent().compute_bounds(self.flow) if slot else (False, None)
+        if not ok:
+            return done()
+        adj = self.scroller.get_vadjustment()
+        target = bounds.get_y() + bounds.get_height() / 2 - adj.get_page_size() / 2 + self.flow.get_margin_top()
+        target = max(adj.get_lower(), min(target, adj.get_upper() - adj.get_page_size()))
+        anim = Adw.TimedAnimation.new(self.scroller, adj.get_value(), target, 250,
+                                      Adw.CallbackAnimationTarget.new(adj.set_value))
+        anim.connect('done', lambda *_: done())
+        anim.play()
+
+    def match_count(self):
+        return sum(1 for s in self.slots.values() if not self.pred or self.pred(s.card))
+
+    def set_filter(self, pred):
+        """Hide the cards `pred(card)` rejects (None = show all)."""
+        self.pred = pred
+        self.flow.set_filter_func(pred and (lambda child: pred(child.get_child().card)))
+        self._sync()
 
     def add_slot(self, ident, slot):
         self.slots[ident] = slot

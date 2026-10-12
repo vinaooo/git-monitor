@@ -1,16 +1,41 @@
 import urllib.parse
 
 from .health import pr_bucket_gitlab, summarize_ci, summarize_prs
-from .status import RepoStatus
+from .http import HttpError
+from .status import RepoInfo, RepoStatus
 
 _CI = {'success': 'success', 'failed': 'failure', 'canceled': 'cancelled',
        'running': 'running', 'pending': 'running', 'created': 'running', 'preparing': 'running',
        'waiting_for_resource': 'running', 'scheduled': 'running'}
 
 
+MAX_PAGES = 10  # listing cap: 1000 projects
+
+
 class GitLabProvider:
     def __init__(self, host, http):
         self.host, self.http = host, http
+
+    def list_repos(self, account, token):
+        """-> ([RepoInfo], truncated): a user's projects, else a group's (subgroups included). Private ones need a token."""
+        h = {'PRIVATE-TOKEN': token} if token else {}
+        api = f'https://{self.host}/api/v4'
+        try:
+            users, _ = self.http.get(f'{api}/users?username={urllib.parse.quote(account)}', h)
+        except HttpError:  # some instances hide the user search from anonymous callers: try it as a group
+            users = []
+        if users:
+            url = f'{api}/users/{users[0]["id"]}/projects?per_page=100'
+        else:
+            url = f'{api}/groups/{urllib.parse.quote(account, safe="")}/projects?include_subgroups=true&per_page=100'
+        infos = []
+        for page in range(1, MAX_PAGES + 1):
+            body, hdr = self.http.get(f'{url}&page={page}' if page > 1 else url, h)
+            infos += [RepoInfo(p['path_with_namespace'], 'forked_from_project' in p, bool(p.get('archived')),
+                               p.get('visibility') != 'public') for p in body]
+            if not hdr.get('X-Next-Page'):
+                return infos, False
+        return infos, True
 
     def fetch(self, path, token):
         h = {'PRIVATE-TOKEN': token} if token else {}

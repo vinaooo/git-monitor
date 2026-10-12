@@ -4,18 +4,31 @@ from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 
 from . import repo_id
 from .card import Card
+from .chips import chips_for
 from .group_page import GroupPage
+from . import importer
 from .groups import Groups
+from .group_settings import GroupSettingsDialog
 from .health import group_severity, severity
+from .import_dialog import ImportDialog
+from .interval_row import IntervalRows
+from .intervals import IntervalStore
 from .motion import Slot
 from .prefs import Prefs
+from .search import matches
 from .status import RepoStatus
 from .sorting import sorted_order
+from .sources import SourceStore
 from .titles import TitleStore
 
-# group severity -> (icon, tooltip): a word-or-glyph twin of the colour tint
-_HEALTH_GLYPH = {'error': ('dialog-error-symbolic', 'Failing'), 'warning': ('dialog-warning-symbolic', 'Needs attention'),
-                 'accent': ('emblem-synchronizing-symbolic', 'In progress'), 'success': ('object-select-symbolic', 'All good')}
+# group marks, worst first: severity -> (icon, tooltip). A group shows one icon per kind present, side by side, in the
+# sidebar row and over its tab; shapes differ so state never rests on colour alone. "success" = ready to merge / all green.
+_MARKS = {'error': ('dialog-error-symbolic', 'Failing'),
+          'warning': ('dialog-warning-symbolic', 'Needs attention'),
+          'accent': ('emblem-synchronizing-symbolic', 'In progress'),
+          'success': ('object-select-symbolic', 'Ready / all good')}
+
+SYNC_SECONDS = 1800  # how often imported accounts are re-listed
 
 
 class Window(Adw.ApplicationWindow):
@@ -25,11 +38,18 @@ class Window(Adw.ApplicationWindow):
         for key, prop in (('window-width', 'default-width'), ('window-height', 'default-height'),
                           ('window-maximized', 'maximized')):
             settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
-        self.cards, self.pages, self.timer = {}, {}, 0
+        self.query, self.results_scheduled = '', 0
+        self.cards, self.pages, self.timers = {}, {}, []  # timers: one refresh source per group
         self.pending, self.inflight, self.marks_scheduled = 0, set(), 0
+        self.group_marks, self.sidebar_marks = {}, {}  # group name -> [severity]; TabPage -> its sidebar marks box
+        self.tab_marks, self.tab_widgets = {}, {}  # TabPage -> marks box overlaid on the tab bar; TabPage -> its AdwTab
         self.pool = ThreadPoolExecutor(max_workers=4)  # ponytail: fixed 4 workers, make it a setting if hosts rate-limit
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
+        self.sources = SourceStore(settings.get_value('sources').unpack(),
+                                   lambda s: settings.set_value('sources', GLib.Variant('a(sssasas)', s)))
+        self.intervals = IntervalStore(settings.get_value('group-intervals').unpack(),
+                                       lambda d: settings.set_value('group-intervals', GLib.Variant('a{si}', d)))
         initial = settings.get_value('groups').unpack()
         self.groups = Groups(initial, lambda g: settings.set_value('groups', GLib.Variant('a(sas)', g)),
                              legacy_repos=[repo_id.migrate(r) for r in settings.get_strv('repos')])
@@ -41,16 +61,22 @@ class Window(Adw.ApplicationWindow):
             self._make_page(group)
             for repo in self.groups.repos(group):
                 self._add_card(repo, group)
+        self._apply_colors()
         self._apply_layout()
         self._apply_view()
         self._apply_sort()
         self._update_actions()
         self.refresh()
         self.tab_view.connect('notify::selected-page', lambda *_: self._on_group_focused())
-        self.restart_timer()
-        settings.connect('changed::refresh-seconds', lambda *_: self.restart_timer())
-        settings.connect('changed::layout', lambda *_: self._apply_layout())
+        self.restart_timers()
+        settings.connect('changed::refresh-seconds', lambda *_: self.restart_timers())
+        settings.connect('changed::sync-imported', lambda *_: self._sync_sources())
+        GLib.timeout_add_seconds(5, lambda: self._sync_sources() or GLib.SOURCE_REMOVE)  # not on the startup path
+        GLib.timeout_add_seconds(SYNC_SECONDS, lambda: self._sync_sources() or GLib.SOURCE_CONTINUE)
+        settings.connect('changed::layout', lambda *_: (self._apply_layout(), self._update_marks()))
         settings.connect('changed::view', lambda *_: self._apply_view())
+        for key in ('colored-tabs', 'colored-icons'):
+            settings.connect(f'changed::{key}', lambda *_: self._apply_colors())
         settings.connect('changed::refresh-all-groups', lambda *_: self._update_marks())
         for key in ('sort', 'sort-reverse'):
             settings.connect(f'changed::{key}', lambda *_: self._apply_sort())
@@ -58,14 +84,15 @@ class Window(Adw.ApplicationWindow):
     # --- ui construction ---
     def _build_ui(self, app):
         menu, section = Gio.Menu(), Gio.Menu()
-        for label, action in (('New group…', 'new-group'), ('Rename group…', 'rename-group'),
+        for label, action in (('Rename group…', 'rename-group'), ('Group settings…', 'group-settings'),
                               ('Delete group…', 'delete-group')):
             section.append(label, f'win.{action}')
         menu.append_section(None, section)
         for i in range(app.menu.get_n_items()):  # flatten: a section of sections loses its separators
             menu.append_section(None, app.menu.get_item_link(i, Gio.MENU_LINK_SECTION))
         self.actions = {}
-        for name, cb in (('new-group', self.ask_new_group), ('rename-group', self.ask_rename_group),
+        for name, cb in (('new-group', self.ask_new_group), ('import-account', self.ask_import), ('group-settings', self.ask_group_settings),
+                         ('rename-group', self.ask_rename_group),
                          ('delete-group', lambda *_: self.tab_view.close_page(self.tab_view.get_selected_page()))):
             act = Gio.SimpleAction.new(name, None)
             act.connect('activate', cb)
@@ -77,9 +104,10 @@ class Window(Adw.ApplicationWindow):
         self.tab_view.connect('page-reordered', lambda *_: (self.groups.set_group_order(self._tab_order()),
                                                             GLib.idle_add(self._tint_tabs)))
         self.tab_view.connect('page-attached', lambda *_: GLib.idle_add(self._tint_tabs))  # tab widgets appear after this
-        self.tab_view.connect('notify::selected-page', lambda *_: self._update_actions())
+        self.tab_view.connect('notify::selected-page', lambda *_: (self._update_actions(), self.body.set_visible_child_name('groups')))  # picking a group drills into it
         group_menu = Gio.Menu()
         group_menu.append('Rename…', 'win.rename-group')
+        group_menu.append('Settings…', 'win.group-settings')
         group_menu.append('Delete…', 'win.delete-group')
         self.group_menu = group_menu
         self.tab_view.set_menu_model(group_menu)
@@ -97,7 +125,21 @@ class Window(Adw.ApplicationWindow):
         act = Gio.SimpleAction.new('add-repo', None)
         act.connect('activate', self.ask_repo)
         self.add_action(act)
-        add = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='Add repository', action_name='win.add-repo')
+        act = Gio.SimpleAction.new('search', None)
+        act.connect('activate', lambda *_: self.search_button.set_active(not self.search_button.get_active()))
+        self.add_action(act)
+        self.search_button = Gtk.ToggleButton(icon_name='edit-find-symbolic', tooltip_text='Search (Ctrl+F)')
+        self.search_entry = Gtk.SearchEntry(width_request=260, placeholder_text='Search name, URL, passing, waiting…')
+        self.search_entry.connect('search-changed', self._on_search_changed)
+        self.search_entry.connect('stop-search', lambda *_: self.search_button.set_active(False))  # Esc
+        self.search_button.connect('toggled', self._on_search_toggled)
+        self.search_revealer = Gtk.Revealer(child=self.search_entry, transition_type=Gtk.RevealerTransitionType.SLIDE_RIGHT,
+                                            transition_duration=250)  # grows out of the magnifier
+        add_menu = Gio.Menu()
+        for label, action in (('Add repository…', 'add-repo'), ('New group…', 'new-group'),
+                              ('Import from account…', 'import-account')):
+            add_menu.append(label, f'win.{action}')
+        add = Gtk.MenuButton(icon_name='list-add-symbolic', tooltip_text='Add', menu_model=add_menu)
         act = Gio.SimpleAction.new('refresh', None)
         act.connect('activate', lambda *_: self.refresh())
         self.add_action(act)
@@ -107,14 +149,27 @@ class Window(Adw.ApplicationWindow):
         content_header.pack_start(self.sidebar_toggle)
         content_header.pack_start(add)
         content_header.pack_start(refresh)
+        content_header.pack_start(self.search_button)
+        content_header.pack_start(self.search_revealer)
         self.content_menu = Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu)  # tabs layout only
         content_header.pack_end(self.content_menu)
         self.view_button = Gtk.MenuButton(icon_name='view-grid-symbolic', always_show_arrow=True,
                                           tooltip_text='View and sort', menu_model=self._build_view_menu())
         content_header.pack_end(self.view_button)
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        content.append(self.tab_bar)
-        content.append(self.tab_view)
+        # AdwTab holds one icon at most, so the marks are real icons overlaid on the bar and kept on their tab
+        self.tab_overlay = Gtk.Overlay(child=self.tab_bar)
+        self.tab_bar.add_tick_callback(lambda *_: self._place_tab_marks() or GLib.SOURCE_CONTINUE)
+        content.append(self.tab_overlay)
+        self.results = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=['boxed-list'], valign=Gtk.Align.START)
+        self.results.set_placeholder(Adw.StatusPage(title='No Matches', icon_name='edit-find-symbolic',
+                                                    description='No repository matches the search.'))
+        self.results.connect('row-activated', self._open_result)
+        clamp = Adw.Clamp(child=self.results, maximum_size=760, margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+        self.body = Gtk.Stack(vexpand=True, transition_type=Gtk.StackTransitionType.CROSSFADE)  # groups | search results
+        self.body.add_named(self.tab_view, 'groups')
+        self.body.add_named(Gtk.ScrolledWindow(child=clamp), 'results')
+        content.append(self.body)
         content_view = Adw.ToolbarView(content=content)
         content_view.add_top_bar(content_header)
         self.toasts = Adw.ToastOverlay(child=content_view)
@@ -145,7 +200,7 @@ class Window(Adw.ApplicationWindow):
         self.split.connect('notify::collapsed', lambda *_: self._sync_toggle())
 
     def _build_view_menu(self):
-        for key in ('sort', 'sort-reverse', 'view'):  # stateful actions backed by GSettings
+        for key in ('sort', 'sort-reverse', 'view', 'layout'):  # stateful actions backed by GSettings
             self.add_action(self.settings.create_action(key))
         menu = Gio.Menu()
         sort = Gio.Menu()
@@ -159,6 +214,10 @@ class Window(Adw.ApplicationWindow):
                             ('Large cards', 'grid-large'), ('List', 'list')):
             view.append(label, f'win.view::{mode}')
         menu.append_section('View', view)
+        groups = Gio.Menu()
+        for label, mode in (('Sidebar', 'sidebar'), ('Tabs', 'tabs')):
+            groups.append(label, f'win.layout::{mode}')
+        menu.append_section('Groups', groups)
         return menu
 
     def _build_sidebar(self):
@@ -167,7 +226,7 @@ class Window(Adw.ApplicationWindow):
         def setup(_f, item):
             row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
             row.append(Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END))
-            row.append(Gtk.Image(visible=False))  # health glyph: the tint alone would be colour-only
+            row.append(Gtk.Box(spacing=4))  # group marks, filled by _update_marks: the tint alone would be colour-only
             drop = Gtk.DropTarget.new(GObject.TYPE_VARIANT, Gdk.DragAction.MOVE)
             drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident.unpack()))
             row.add_controller(drop)
@@ -178,12 +237,10 @@ class Window(Adw.ApplicationWindow):
 
         def bind(_f, item):
             page, row = item.get_item(), item.get_child()
-            label, glyph = row.get_first_child(), row.get_last_child()
-            sync = GObject.BindingFlags.SYNC_CREATE
-            item.bindings = [page.bind_property('title', label, 'label', sync),
-                             page.bind_property('indicator-icon', glyph, 'gicon', sync),
-                             page.bind_property('indicator-icon', glyph, 'visible', sync, lambda _b, icon: icon is not None),
-                             page.bind_property('tooltip', glyph, 'tooltip-text', sync)]
+            marks = row.get_last_child()
+            item.bindings = [page.bind_property('title', row.get_first_child(), 'label', GObject.BindingFlags.SYNC_CREATE)]
+            self.sidebar_marks[page] = marks
+            self._fill_marks(marks, self.group_marks.get(page.get_child().name, []))
             def tint(*_):
                 if row.get_parent():  # the ListView row widget; not parented yet while binding
                     self._set_tint(row.get_parent(), page.get_keyword())
@@ -193,6 +250,7 @@ class Window(Adw.ApplicationWindow):
 
         def unbind(_f, item):
             [b.unbind() for b in item.bindings]
+            self.sidebar_marks.pop(item.get_item(), None)
             item.get_item().disconnect(item.tint_handler)
 
         factory.connect('setup', setup)
@@ -214,7 +272,7 @@ class Window(Adw.ApplicationWindow):
 
     def _apply_layout(self):
         sidebar = self.settings.get_string('layout') == 'sidebar'
-        self.tab_bar.set_visible(not sidebar)
+        self.tab_overlay.set_visible(not sidebar)
         self.content_menu.set_visible(not sidebar)  # the sidebar header carries the menu otherwise
         self._sync_toggle()
 
@@ -225,6 +283,10 @@ class Window(Adw.ApplicationWindow):
         self.split.set_show_sidebar(sidebar and not collapsed)
 
     # --- view and sort (live: re-sorted whenever a refresh brings new numbers) ---
+    def _apply_colors(self):
+        for key in ('colored-tabs', 'colored-icons'):  # style.py scopes the colour rules under these window classes
+            (self.add_css_class if self.settings.get_boolean(key) else self.remove_css_class)(key)
+
     def _apply_view(self):
         columns = {'grid-small': 6, 'grid-medium': 4, 'grid-large': 2, 'list': 1}
         mode = self.settings.get_string('view')
@@ -238,6 +300,75 @@ class Window(Adw.ApplicationWindow):
             order = [i for i in self.groups.repos(name) if i in self.cards]  # cards are created one by one at startup
             info = {i: (self.cards[i].title.get_label(), self.cards[i].status) for i in order}
             self.pages[name].apply_order(sorted_order(order, mode, reverse, info))
+        self._refilter(group)
+
+    # --- search (all groups; the tab / sidebar title carries the match count) ---
+    def _refilter(self, group=None):
+        pred = self.query.strip() and (lambda c: matches(self.query, c.ident, c.title.get_label(), c.status))
+        for name in [group] if group else list(self.pages):
+            page = self.pages[name]
+            page.set_filter(pred or None)
+            self.tab_view.get_page(page).set_title(f'{name} ({page.match_count()})' if pred else name)
+        if pred and not self.results_scheduled:  # debounced: a burst of refresh results rebuilds the list once
+            self.results_scheduled = GLib.idle_add(self._fill_results)
+
+    def _on_search_toggled(self, button):
+        """The search box slides out of the magnifier; closing it clears the query."""
+        on = button.get_active()
+        self.search_revealer.set_reveal_child(on)
+        if on:
+            self.search_entry.grab_focus()
+        else:
+            self.search_entry.set_text('')
+            self.body.set_visible_child_name('groups')
+
+    def _on_search_changed(self, entry):
+        self.query = entry.get_text()
+        self._refilter()
+        self.body.set_visible_child_name('results' if self.query.strip() else 'groups')
+
+    def _fill_results(self):
+        """One list of every matching card across groups: title, group, and the same CI / PR words the card shows."""
+        self.results_scheduled = 0
+        while (row := self.results.get_first_child()):
+            self.results.remove(row)
+        if not self.query.strip():
+            return GLib.SOURCE_REMOVE
+        for group in self.pages:
+            for ident in self.groups.repos(group):
+                card = self.cards.get(ident)
+                if not card or not matches(self.query, card.ident, card.title.get_label(), card.status):
+                    continue
+                row = Adw.ActionRow(title=GLib.markup_escape_text(card.title.get_label()), activatable=True,
+                                    subtitle=GLib.markup_escape_text(f'{group} · {ident}'))
+                row.group, row.ident = group, ident
+                words = [c.text for _g, chips in chips_for(card.status) for c in chips]
+                row.add_suffix(Gtk.Label(label=' · '.join(words), css_classes=['dim-label'], wrap=True, xalign=1,
+                                         max_width_chars=34))
+                self.results.append(row)
+        return GLib.SOURCE_REMOVE
+
+    def _open_result(self, _list, row):
+        group, ident = row.group, row.ident
+        self.tab_view.set_selected_page(self._tab_page(group))
+        self.search_button.set_active(False)  # closes the search, clears the query
+        self.set_focus(None)
+
+        def show():  # once the unfiltered grid has been laid out
+            self.set_focus(None)  # else GTK parks keyboard focus on the first card and draws its focus ring
+            if group in self.pages and ident in self.cards:
+                self.pages[group].reveal(ident, lambda: ident in self.cards and self._blink(self.cards[ident]))  # blink once it has arrived
+            return GLib.SOURCE_REMOVE
+
+        GLib.timeout_add(80, show)
+
+    def _blink(self, card, ticks=6):
+        """Flash the card's highlight: on/off three times."""
+        if not card.get_parent() or ticks == 0:
+            card.remove_css_class('search-hit')
+            return
+        (card.add_css_class if ticks % 2 == 0 else card.remove_css_class)('search-hit')
+        GLib.timeout_add(220, lambda: self._blink(card, ticks - 1) or GLib.SOURCE_REMOVE)
 
     # --- group health tint on the tab / sidebar row (only meaningful while every group is refreshed) ---
     _TINTS = ('tint-error', 'tint-warning', 'tint-accent', 'tint-success')
@@ -249,19 +380,54 @@ class Window(Adw.ApplicationWindow):
         if sev and sev != 'none':
             widget.add_css_class(f'tint-{sev}')
 
+    @staticmethod
+    def _fill_marks(box, marks):
+        while child := box.get_first_child():
+            box.remove(child)
+        for sev in marks:
+            icon, text = _MARKS[sev]
+            image = Gtk.Image(icon_name=icon, tooltip_text=text, css_classes=[f'mark-{sev}'])
+            image.update_property([Gtk.AccessibleProperty.LABEL], [text])
+            box.append(image)
+
     def _update_marks(self):
         every = self.settings.get_boolean('refresh-all-groups')
+        self.group_marks = {}
         for name, page in self.pages.items():
             cards = [self.cards[i] for i in self.groups.repos(name) if i in self.cards]
-            sev = group_severity([severity(c.status) for c in cards]) if every else 'none'
-            ready = sum((c.status.pr_counts or {}).get('approved', 0) for c in cards if c.status) if every else 0
+            seen = {severity(c.status) for c in cards} if every else set()
+            ready = any((c.status.pr_counts or {}).get('approved') for c in cards if c.status) if every else False
+            seen.discard('success')  # green CI alone is not worth a mark: only a PR ready to merge is
+            if ready:
+                seen.add('success')
+            sev = group_severity(seen)
+            marks = [m for m in ('error', 'warning', 'accent', 'success') if m in seen]
+            self.group_marks[name] = marks
             tab = self.tab_view.get_page(page)
             tab.set_keyword(sev)  # carries the severity: sidebar rows follow its notify
-            icon, text = _HEALTH_GLYPH.get(sev, (None, ''))  # shown by tabs and sidebar rows alike
-            tab.set_indicator_icon(icon and Gio.ThemedIcon.new(icon))
-            tab.set_tooltip(text)
-            tab.set_title(f'{name}  ● {ready}' if ready else name)  # ● N = approved PRs/MRs ready to merge
+            tab.set_tooltip(', '.join(_MARKS[m][1] for m in marks))
+            if tab not in self.tab_marks:
+                box = Gtk.Box(spacing=4, halign=Gtk.Align.START, valign=Gtk.Align.CENTER, can_target=False)
+                self.tab_overlay.add_overlay(box)
+                self.tab_marks[tab] = box
+            self._fill_marks(self.tab_marks[tab], marks)
+            if (box := self.sidebar_marks.get(tab)):
+                self._fill_marks(box, marks)
+        for tab in [t for t in self.tab_marks if t.get_child() is None or t.get_child().name not in self.pages]:
+            self.tab_overlay.remove_overlay(self.tab_marks.pop(tab))
         self._tint_tabs()
+
+    def _place_tab_marks(self):
+        """Per frame while the tab bar is shown: park each marks box at the start of its tab (hidden if scrolled out)."""
+        width = self.tab_overlay.get_width()
+        for tab, box in self.tab_marks.items():
+            ok, bounds = self.tab_widgets[tab].compute_bounds(self.tab_overlay) if tab in self.tab_widgets else (False, None)
+            x = int(bounds.get_x()) + 8 if ok else 0
+            visible = ok and x >= 0 and x + box.get_width() <= width and bool(box.get_first_child())
+            if box.get_visible() != visible:
+                box.set_visible(visible)
+            if visible and box.get_margin_start() != x:
+                box.set_margin_start(x)
 
     def _tint_tabs(self):
         """AdwTabBar has no per-tab API, so find its internal `tab` widgets and tag them by page."""
@@ -276,6 +442,7 @@ class Window(Adw.ApplicationWindow):
             if widget.get_css_name() == 'tab' and widget.find_property('page'):
                 page = widget.get_property('page')
                 if page:
+                    self.tab_widgets[page] = widget
                     self._set_tint(widget, page.get_keyword())
 
     # --- groups ---
@@ -298,7 +465,7 @@ class Window(Adw.ApplicationWindow):
             self.actions['rename-group'].set_enabled(True)
 
     def _make_page(self, group):
-        page = GroupPage(group, self.groups, can_reorder=lambda: self.settings.get_string('sort') == 'manual')
+        page = GroupPage(group, self.groups, can_reorder=lambda: self.settings.get_string('sort') == 'manual' and not self.query)
         self.pages[group] = page
         self.tab_view.append(page).set_title(group)
         return page
@@ -322,6 +489,7 @@ class Window(Adw.ApplicationWindow):
             self.toasts.add_toast(Adw.Toast(title='Invalid or duplicate group name'))
             return
         self.tab_view.set_selected_page(self._tab_page_of(self._make_page(name)))
+        self.restart_timers()
 
     def _tab_page_of(self, page):
         return self.tab_view.get_page(page)
@@ -336,10 +504,13 @@ class Window(Adw.ApplicationWindow):
             if new != old:
                 self.toasts.add_toast(Adw.Toast(title='Invalid or duplicate group name'))
             return
+        self.sources.rename_group(old, new)
+        self.intervals.rename_group(old, new)
         page = self.pages.pop(old)
         page.name = new
         self.pages[new] = page
         self.tab_view.get_page(page).set_title(new)
+        self._refilter()
         self._update_marks()
 
     def _on_close_page(self, tab_view, tab_page):
@@ -365,17 +536,116 @@ class Window(Adw.ApplicationWindow):
         for repo in self.groups.repos(name):
             self._drop_repo(repo)  # the whole group was confirmed: no per-repo undo
         self.groups.remove(name)
+        self.sources.remove_group(name)
+        self.intervals.remove_group(name)
         self.pages.pop(name)
+        self.restart_timers()
         self.tab_view.close_page_finish(tab_page, True)
 
     # --- repos ---
     def _add_card(self, ident, group):
         card = Card(ident, self.remove_repo, self.rename_repo, self.drag_started, self.drag_finished,
                     self.titles.get(ident), other_groups=self.other_groups, on_move=self.move_to_group,
-                    can_drag=lambda: self.settings.get_string('sort') == 'manual')
+                    can_drag=lambda: self.settings.get_string('sort') == 'manual' and not self.query)
         self.cards[ident] = card
         self.pages[group].add_slot(ident, Slot(card))
         self._apply_sort(group)
+
+    def _others_load(self, exclude=None):
+        """(github_repos, interval) of the groups that refresh alongside the one being edited: every other group,
+        but only with 'Refresh groups out of focus' on (otherwise just the visible group refreshes)."""
+        if not self.settings.get_boolean('refresh-all-groups'):
+            return []
+        default = self.settings.get_int('refresh-seconds')
+        return [(sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups.repos(g)),
+                 self.intervals.effective(g, default)) for g in self.groups.names() if g != exclude]
+
+    def ask_group_settings(self, *_):
+        group, current = self._selected_group(), self.intervals.get(self._selected_group())
+        github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups.repos(group))
+        rows = IntervalRows(self.settings.get_int('refresh-seconds'), current, github,
+                            bool(self.tokens.get(repo_id.GITHUB_HOST)), self._others_load(exclude=group))
+        src = next((x for x in self.sources.all() if x[0] == group), None)
+        GroupSettingsDialog(group, rows, current, lambda seconds: (self.intervals.set(group, seconds),
+                                                                   self.restart_timers()),
+                            src and f'{src[1]}/{src[2]}',
+                            src and (lambda: self.ask_browse(group, src))).present(self)
+
+    def ask_browse(self, group, src):
+        """List every repository of the group's account (tracked ones ticked) to add more."""
+        _g, host, account, kinds = src
+        ImportDialog(self.settings, self.tokens, self.service, self.pool.submit, self.groups.all_repos,
+                     lambda *a: self.import_account(*a, group=group), prefill=(host, account, kinds)).present(self)
+
+    # --- import from an account ---
+    def ask_import(self, *_):
+        ImportDialog(self.settings, self.tokens, self.service, self.pool.submit, self.groups.all_repos,
+                     self._confirm_import, self._others_load()).present(self)
+
+    def _confirm_import(self, host, account, chosen, kinds, listed, interval):
+        if self.settings.get_boolean('sync-asked'):
+            self.import_account(host, account, chosen, kinds, listed, interval)
+            return
+        dlg = Adw.AlertDialog(heading='Keep this group in sync?',
+                              body='Painel can add repositories this account creates later. You can change this in Preferences.')
+        dlg.add_response('no', 'Not now')
+        dlg.add_response('yes', 'Keep in sync')
+        dlg.set_response_appearance('yes', Adw.ResponseAppearance.SUGGESTED)
+        dlg.set_default_response('yes')
+
+        def answered(_dlg, response):
+            self.settings.set_boolean('sync-imported', response == 'yes')
+            self.settings.set_boolean('sync-asked', True)
+            self.import_account(host, account, chosen, kinds, listed, interval)
+
+        dlg.connect('response', answered)
+        dlg.present(self)
+
+    def import_account(self, host, account, chosen, kinds, listed, interval=None, group=None):
+        """`listed` = every repo of the account (chosen or not) so sync never adds the ones skipped here."""
+        wanted = importer.group_name(account)
+        group = group or next((g for g in self.groups.names() if g.lower() == wanted.lower()), None)  # re-import adds to it
+        if group:
+            self.tab_view.set_selected_page(self._tab_page(group))
+        else:
+            self.new_group(wanted)
+            group = wanted
+        for ident in chosen:
+            self.groups.add_repo(group, ident)
+            self._add_card(ident, group)
+        self.sources.add(group, host, account, kinds, listed)
+        if interval is not None:
+            self.intervals.set(group, interval)
+        self.restart_timers()
+        self.refresh()
+        self.toasts.add_toast(Adw.Toast(title=f'Imported {len(chosen)} repositories into {group}'))
+
+    def _sync_sources(self):
+        """Add repositories an imported account created since the last listing (only with the preference on)."""
+        if not self.settings.get_boolean('sync-imported'):
+            return
+        for group, host, account, kinds in self.sources.all():
+            token = self.tokens.get(host)
+            self.pool.submit(self._sync_worker, group, host, account, kinds, token)
+
+    def _sync_worker(self, group, host, account, kinds, token):
+        infos, _truncated, error = self.service.list_repos(host, account, token)
+        if not error:
+            GLib.idle_add(self._synced, group, host, kinds, infos)
+
+    def _synced(self, group, host, kinds, infos):
+        if group not in self.pages:  # deleted meanwhile
+            return
+        listed = [f'{host}/{i.path}' for i in importer.select(infos, 'forks' in kinds, 'archived' in kinds)]
+        added = 0
+        for ident in self.sources.take_new(group, listed):
+            if self.groups.group_of(ident) is None:  # tracked elsewhere already: leave it there
+                self.groups.add_repo(group, ident)
+                self._add_card(ident, group)
+                added += 1
+        if added:
+            self.refresh()
+            self.toasts.add_toast(Adw.Toast(title=f'{added} new repositories in {group}'))
 
     def ask_repo(self, *_):
         entry = Gtk.Entry(placeholder_text='GitHub/GitLab URL or owner/name', activates_default=True)
@@ -470,23 +740,33 @@ class Window(Adw.ApplicationWindow):
             page.drag_finished()
 
     # --- refresh ---
-    def restart_timer(self):
-        if self.timer:
-            GLib.source_remove(self.timer)
-        self.timer = GLib.timeout_add_seconds(self.settings.get_int('refresh-seconds'),
-                                              lambda: self.refresh() or True)
+    def restart_timers(self):
+        """One timer per group at its own interval (the global one unless the group has a custom one)."""
+        for source in self.timers:
+            GLib.source_remove(source)
+        default = self.settings.get_int('refresh-seconds')
+        self.timers = [GLib.timeout_add_seconds(self.intervals.effective(group, default), self._tick, group)
+                       for group in self.groups.names()]
+
+    def _tick(self, group):
+        if group not in self.pages:  # renamed or deleted: restart_timers replaced this source already
+            return GLib.SOURCE_REMOVE
+        if self.settings.get_boolean('refresh-all-groups') or group == self._selected_group():
+            self.refresh([group])
+        return GLib.SOURCE_CONTINUE
 
     def _on_group_focused(self):
         if not self.settings.get_boolean('refresh-all-groups'):  # otherwise it is already fresh
             self.refresh()  # new tab: refresh at once
 
-    def refresh(self):
+    def refresh(self, groups=None):
+        """Refresh `groups`; by default only the visible group (saves API quota), or all with the preference."""
         if not self.tab_view.get_selected_page():
             return
         tokens = {}
-        # default: only the visible group (saves API quota); the preference widens it to every group
-        names = self.groups.all_repos() if self.settings.get_boolean('refresh-all-groups') \
-            else self.groups.repos(self._selected_group())
+        if groups is None:
+            groups = self.groups.names() if self.settings.get_boolean('refresh-all-groups') else [self._selected_group()]
+        names = [name for group in groups for name in self.groups.repos(group)]
         for name in names:
             host = repo_id.host_of(name)
             if host not in tokens:
@@ -526,5 +806,6 @@ class Window(Adw.ApplicationWindow):
 
     def show_prefs(self):
         Prefs(self.settings, self.tokens, self.cards,
-              lambda msg: self.toasts.add_toast(Adw.Toast(title=msg)),
-              active=self.groups.repos(self._selected_group())).present(self)  # for the rate-limit estimate
+              lambda msg: self.toasts.add_toast(Adw.Toast(title=msg)),  # the rest feeds the rate-limit estimate
+              groups={g: self.groups.repos(g) for g in self.groups.names()}, selected=self._selected_group(),
+              custom={g: self.intervals.get(g) for g in self.groups.names() if self.intervals.get(g)}).present(self)

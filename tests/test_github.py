@@ -1,6 +1,8 @@
 import unittest
 
 from painel.github import GitHubProvider
+from painel.http import HttpError
+from painel.status import RepoInfo
 from tests.fakes import FakeHttp
 
 REPO = {'full_name': 'O/r', 'html_url': 'https://github.com/O/r', 'open_issues_count': 10, 'default_branch': 'main'}
@@ -75,3 +77,55 @@ class GitHubPrTest(unittest.TestCase):
         self.assertEqual(s.details['changes'], ['#2 pr2'])
         self.assertTrue(all(h['Authorization'] == 'Bearer tok' for h in http.sent))
         self.assertEqual(http.bodies[0]['variables'], {'owner': 'o', 'name': 'r'})
+
+
+def repo(name, fork=False, archived=False, private=False):
+    return {'full_name': name, 'fork': fork, 'archived': archived, 'private': private}
+
+
+def link(url):
+    return {'Link': f'<{url}>; rel="next", <{url}>; rel="last"'}
+
+
+class GitHubListTest(unittest.TestCase):
+    def list(self, routes, account='o', token=None):
+        http = FakeHttp(routes)
+        return GitHubProvider(http).list_repos(account, token), http
+
+    def test_anonymous_lists_public_repos_of_the_account(self):
+        (infos, truncated), http = self.list({'/users/o/repos': ([repo('o/a'), repo('o/b', fork=True, archived=True)], {})})
+        self.assertEqual(infos, [RepoInfo('o/a', False, False, False), RepoInfo('o/b', True, True, False)])
+        self.assertFalse(truncated)
+        self.assertNotIn('Authorization', http.sent[0])
+
+    def test_follows_pagination(self):
+        page2 = 'https://api.github.com/users/o/repos?per_page=100&page=2'
+        (infos, truncated), http = self.list({'page=2': ([repo('o/b')], {}),
+                                              '/users/o/repos': ([repo('o/a')], link(page2))})
+        self.assertEqual([i.path for i in infos], ['o/a', 'o/b'])
+        self.assertFalse(truncated)
+
+    def test_page_cap_marks_truncated(self):
+        endless = 'https://api.github.com/users/o/repos?per_page=100&page=2'
+        (infos, truncated), http = self.list({'/users/o/repos': ([repo('o/a')], link(endless))})
+        self.assertTrue(truncated)
+        self.assertEqual(len(http.urls), 10)
+
+    def test_own_account_with_token_includes_private(self):
+        (infos, _), http = self.list({'/user/repos': ([repo('O/a', private=True)], {}), '/user': ({'login': 'O'}, {})},
+                                     account='o', token='tok')
+        self.assertTrue(infos[0].private)
+        self.assertTrue(any('/user/repos?affiliation=owner' in u for u in http.urls))
+        self.assertTrue(all(h['Authorization'] == 'Bearer tok' for h in http.sent))
+
+    def test_other_account_with_token_is_tried_as_org_then_user(self):
+        (infos, _), http = self.list({'/orgs/acme/repos': ([repo('acme/a', private=True)], {}), '/user': ({'login': 'me'}, {})},
+                                     account='acme', token='tok')
+        self.assertEqual(infos[0].path, 'acme/a')
+        (infos, _), http = self.list({'/orgs/someone/repos': HttpError(404), '/users/someone/repos': ([repo('someone/x')], {}),
+                                      '/user': ({'login': 'me'}, {})}, account='someone', token='tok')
+        self.assertEqual(infos[0].path, 'someone/x')
+
+    def test_other_http_errors_propagate(self):
+        with self.assertRaises(HttpError):
+            self.list({'/orgs/acme/repos': HttpError(403), '/user': ({'login': 'me'}, {})}, account='acme', token='tok')
