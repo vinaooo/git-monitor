@@ -25,5 +25,9 @@
     <key name="titles" type="a{ss}"><default>{}</default><summary>Custom card titles by repository</summary></key>
     <key name="refresh-all-groups" type="b"><default>false</default><summary>Also refresh groups that are not in focus</summary></key>
     <key name="refresh-seconds" type="i"><range min="15" max="3600"/><default>60</default><summary>Auto refresh interval</summary></key>
+    <key name="signal-security" type="b"><default>false</default><summary>Card signal: security alerts</summary></key>
+    <key name="signal-reviews" type="b"><default>false</default><summary>Card signal: unresolved review comments</summary></key>
+    <key name="signal-release" type="b"><default>false</default><summary>Card signal: last release</summary></key>
+    <key name="signal-push" type="b"><default>false</default><summary>Card signal: last push</summary></key>
   </schema>
 </schemalist>

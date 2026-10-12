@@ -693,7 +693,7 @@ class Window(Adw.ApplicationWindow):
         github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups.repos(group))
         rows = IntervalRows(self.settings.get_int('refresh-seconds'), current, github,
                             bool(self.tokens.get(repo_id.GITHUB_HOST)), self._others_load(exclude=group),
-                            self.service.not_modified_ratio())
+                            self.service.not_modified_ratio(), self.service.signals())
         src = next((x for x in self.sources.all() if x[0] == group), None)
         GroupSettingsDialog(group, rows, current, lambda seconds: (self.intervals.set(group, seconds),
                                                                    self.restart_timers()),

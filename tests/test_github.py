@@ -177,3 +177,91 @@ class GitHubBatchTest(unittest.TestCase):
         heads, _ = self.heads({'r0': gql_repo(issues=10 - 1, prs=gql['nodes']), 'r1': None})
         batched = GitHubProvider(FakeHttp(routes())).fetch('o/r', 'tok', heads['o/r'])
         self.assertEqual(alone, batched)
+
+
+ALL = frozenset({'security', 'reviews', 'release', 'push'})
+THREADS = {'nodes': [{'isResolved': False}, {'isResolved': True}, {'isResolved': False}]}
+
+
+def signal_repo(**kw):
+    r = gql_repo(prs=[node(1, reviewThreads=THREADS), node(2, reviewThreads={'nodes': []})])
+    r.update(vulnerabilityAlerts={'totalCount': 3}, pushedAt='2026-10-01T00:00:00Z',
+             latestRelease={'tagName': 'v1.2', 'publishedAt': '2026-09-01T00:00:00Z'})
+    r.update(kw)
+    return r
+
+
+class GitHubSignalsTest(unittest.TestCase):
+    def heads(self, signals, repo=None, token='tok'):
+        http = FakeHttp({'/graphql': ({'data': {'r0': repo or signal_repo()}}, {})})
+        return GitHubProvider(http, signals).heads(['o/r'], token), http
+
+    def test_disabled_signals_add_nothing_to_the_query(self):
+        _, http = self.heads(frozenset())
+        q = http.bodies[0]['query']
+        for field in ('vulnerabilityAlerts', 'reviewThreads', 'latestRelease', 'pushedAt'):
+            self.assertNotIn(field, q)
+
+    def test_each_enabled_signal_adds_its_field(self):
+        _, http = self.heads(ALL)
+        q = http.bodies[0]['query']
+        for field in ('vulnerabilityAlerts', 'reviewThreads', 'latestRelease', 'pushedAt'):
+            self.assertIn(field, q)
+
+    def test_head_parses_signals(self):
+        heads, _ = self.heads(ALL)
+        x = heads['o/r'].extra
+        self.assertEqual((x['dependabot'], x['unresolved'], x['release'], x['released_at'], x['pushed_at']),
+                         (3, 2, 'v1.2', '2026-09-01T00:00:00Z', '2026-10-01T00:00:00Z'))
+        self.assertEqual(heads['o/r'].pr_details['unresolved'], ['#1 pr1: 2'])
+
+    def test_no_access_or_no_release_stays_unknown(self):
+        heads, _ = self.heads(ALL, signal_repo(vulnerabilityAlerts=None, latestRelease=None))
+        x = heads['o/r'].extra
+        self.assertNotIn('dependabot', x)
+        self.assertNotIn('release', x)
+
+    def fetch(self, signals, token='tok', scanning=None, off=None, runs=True):
+        http = FakeHttp({'code-scanning': scanning if scanning is not None else ([{}, {}], {}), **routes()})
+        p = GitHubProvider(http, signals, off if off is not None else set())
+        heads, _ = self.heads(signals)
+        return p.fetch('o/r', token, heads['o/r']), http, p
+
+    def test_fetch_merges_head_signals_and_code_scanning(self):
+        s, _, _ = self.fetch(ALL)
+        self.assertEqual((s.dependabot, s.code_scanning, s.unresolved, s.release, s.pushed_at),
+                         (3, 2, 2, 'v1.2', '2026-10-01T00:00:00Z'))
+
+    def test_code_scanning_not_requested_when_disabled_or_anonymous(self):
+        _, http, _ = self.fetch(frozenset({'push'}))
+        self.assertFalse(any('code-scanning' in u for u in http.urls))
+        http = FakeHttp({'/releases/latest': HttpError(404), **routes()})
+        s = GitHubProvider(http, ALL).fetch('o/r', None)
+        self.assertFalse(any(k in u for u in http.urls for k in ('code-scanning', '/graphql')))
+        self.assertIsNone(s.code_scanning)
+
+    def test_code_scanning_denied_is_silent_and_never_retried(self):
+        off = set()
+        s, http, p = self.fetch(ALL, scanning=HttpError(403), off=off)
+        self.assertIsNone(s.error)
+        self.assertIsNone(s.code_scanning)
+        heads, _ = self.heads(ALL)
+        before = sum('code-scanning' in u for u in http.urls)
+        p.fetch('o/r', 'tok', heads['o/r'])
+        self.assertEqual(before, sum('code-scanning' in u for u in http.urls))
+
+    def test_code_scanning_page_cap_is_kept_as_100(self):
+        s, _, _ = self.fetch(ALL, scanning=([{}] * 100, {}))
+        self.assertEqual(s.code_scanning, 100)
+
+    def test_rest_path_gets_pushed_at_and_release(self):
+        http = FakeHttp({'/releases/latest': ({'tag_name': 'v9', 'published_at': '2026-01-01T00:00:00Z'}, {}),
+                         **routes()})
+        http.routes['/repos/o/r'] = (dict(REPO, pushed_at='2026-02-02T00:00:00Z'), {})
+        s = GitHubProvider(http, frozenset({'release', 'push'})).fetch('o/r', None)
+        self.assertEqual((s.release, s.released_at, s.pushed_at), ('v9', '2026-01-01T00:00:00Z', '2026-02-02T00:00:00Z'))
+
+    def test_rest_path_without_a_release_is_not_an_error(self):
+        http = FakeHttp({'/releases/latest': HttpError(404), **routes()})
+        s = GitHubProvider(http, frozenset({'release'})).fetch('o/r', None)
+        self.assertIsNone(s.release)

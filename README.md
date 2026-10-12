@@ -31,6 +31,19 @@ GSETTINGS_SCHEMA_DIR=_prefix/share/glib-2.0/schemas XDG_DATA_DIRS=_prefix/share:
 
 Tokens are optional. Without one, only public repositories work and the API limits are low (GitHub review states need a token). Add read-only tokens in **Preferences → Access tokens**: GitHub fine-grained (Metadata, Issues, Pull requests, Actions: read), GitLab `read_api` or Forgejo/Gitea `read:repository` + `read:issue` (self-hosted instances are declared there too), with an expiry date. They are stored in the system keyring (libsecret), never in files or settings.
 
+### Optional card signals (GitHub)
+
+Off by default (**Preferences → Card signals**); a signal you leave off makes no requests. All read-only; a missing permission just hides that chip, with no error.
+
+| Signal | Token needed | Fine-grained permission (read) |
+|---|---|---|
+| Security alerts | yes | Dependabot alerts + Code scanning alerts (classic token: `security_events`, plus `repo` for private repos). Both usually require access to the repo's Security tab (admin/security manager). |
+| Unresolved review comments | yes | Pull requests (already listed above) |
+| Last release | no | none for public repos; Contents for private ones |
+| Last push | no | Metadata |
+
+Extra cost per repo per refresh with a token: security ≈ 1 conditional request + a GraphQL field, reviews ≈ half a GraphQL point; release and push are free. Without a token only release (1 request) and push run.
+
 ## Development
 
 ```
