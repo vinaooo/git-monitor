@@ -5,7 +5,7 @@ import sys
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Adw, Gio, Gtk
+from gi.repository import Adw, Gio, GLib, Gtk
 
 from . import style
 from .http import UrllibClient
@@ -40,6 +40,10 @@ class App(Adw.Application):
             act = Gio.SimpleAction.new(name, None)
             act.connect('activate', cb)
             self.add_action(act)
+        for name, cb in (('open-card', self.open_card), ('open-ci', self.open_ci)):
+            act = Gio.SimpleAction.new(name, GLib.VariantType.new('s'))  # target: repo id / URL, set by CI notifications
+            act.connect('activate', cb)
+            self.add_action(act)
         for action, accels in ACCELS.items():
             self.set_accels_for_action(action, accels)
 
@@ -49,6 +53,15 @@ class App(Adw.Application):
 
     def do_activate(self):
         (self.props.active_window or Window(self, self.settings, self.service, self.tokens)).present()
+
+    def open_card(self, _action, target):
+        self.activate()  # the app may have been started by the click
+        win = self.props.active_window
+        if group := win.groups.group_of(target.get_string()):
+            win.open_card(group, target.get_string())
+
+    def open_ci(self, _action, target):
+        Gtk.UriLauncher(uri=target.get_string()).launch(self.props.active_window, None, None, None)
 
     def shortcuts(self, *_):
         dialog = Adw.ShortcutsDialog()

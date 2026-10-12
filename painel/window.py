@@ -1,3 +1,4 @@
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
@@ -16,6 +17,7 @@ from .icon_picker import IconPicker
 from .icons import DEFAULT as DEFAULT_ICON, IconStore
 from .intervals import IntervalStore
 from .motion import Slot
+from .notify import StateStore, ci_url, step, wanted
 from .prefs import Prefs
 from .search import matches
 from .status import RepoStatus
@@ -53,6 +55,8 @@ class Window(Adw.ApplicationWindow):
                                    lambda s: settings.set_value('sources', GLib.Variant('a(sssasas)', s)))
         self.icons = IconStore(settings.get_value('group-icons').unpack(),
                                lambda d: settings.set_value('group-icons', GLib.Variant('a{ss}', d)))
+        self.ci_state = StateStore(os.path.join(GLib.get_user_data_dir(), 'painel', 'ci-state.json'))
+        self.sent, self.overflow = 0, 0  # notifications in the current refresh pass
         self.sidebar_icons = {}  # TabPage -> its sidebar icon
         self.intervals = IntervalStore(settings.get_value('group-intervals').unpack(),
                                        lambda d: settings.set_value('group-intervals', GLib.Variant('a{si}', d)))
@@ -376,7 +380,9 @@ class Window(Adw.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def _open_result(self, _list, row):
-        group, ident = row.group, row.ident
+        self.open_card(row.group, row.ident)
+
+    def open_card(self, group, ident):
         self.tab_view.set_selected_page(self._tab_page(group))
         self._show_real()  # the card may be opened from a virtual group view
         self.search_button.set_active(False)  # closes the search, clears the query
@@ -580,6 +586,7 @@ class Window(Adw.ApplicationWindow):
         self.sources.rename_group(old, new)
         self.intervals.rename_group(old, new)
         self.icons.rename_group(old, new)
+        self._set_muted(old, False, rename=new)
         page = self.pages.pop(old)
         page.name = new
         self.pages[new] = page
@@ -613,6 +620,7 @@ class Window(Adw.ApplicationWindow):
         self.sources.remove_group(name)
         self.intervals.remove_group(name)
         self.icons.remove_group(name)
+        self._set_muted(name, False)
         self.pages.pop(name)
         self.restart_timers()
         self.tab_view.close_page_finish(tab_page, True)
@@ -645,7 +653,21 @@ class Window(Adw.ApplicationWindow):
                                                                    self.restart_timers()),
                             src and f'{src[1]}/{src[2]}',
                             src and (lambda: self.ask_browse(group, src)),
-                            self.icons.get(group), lambda icon: self._set_group_icon(group, icon)).present(self)
+                            self.icons.get(group), lambda icon: self._set_group_icon(group, icon),
+                            group not in self.settings.get_strv('notify-muted'),
+                            lambda on: self._set_muted(group, not on)).present(self)
+
+    def _set_muted(self, group, muted, rename=None):
+        """Mute/unmute CI notifications of `group`; `rename`: the group was renamed, carry the mute over."""
+        old = self.settings.get_strv('notify-muted')
+        was = group in old
+        rest = [g for g in old if g != group]
+        if rename and was:
+            rest.append(rename)
+        elif muted:
+            rest.append(group)
+        if rest != old:
+            self.settings.set_strv('notify-muted', rest)
 
     def _set_group_icon(self, group, icon):
         self.icons.set(group, icon)
@@ -788,6 +810,7 @@ class Window(Adw.ApplicationWindow):
 
     def _drop_repo(self, name):
         self.titles.remove(name)
+        self.ci_state.forget(name)
         self.cards.pop(name)
         self.pages[self.groups.group_of(name)].remove_slot(name)
         self.groups.remove_repo(name)
@@ -887,12 +910,50 @@ class Window(Adw.ApplicationWindow):
         card = self.cards.get(name)  # may have been removed meanwhile
         if card:
             card.update(data)
+            self._notify_ci(name, data)
             for mirrors in self.mirrors.values():
                 if name in mirrors:
                     mirrors[name].update(data)
             self._apply_sort(self.groups.group_of(name))
             if not self.marks_scheduled:  # a burst of results walks the tab bar once, not once per repo
                 self.marks_scheduled = GLib.idle_add(self._flush_marks)
+        if not self.pending:
+            self._flush_overflow()
+
+    MAX_NOTES = 5  # per refresh pass; the rest becomes one summary
+
+    def _notify_ci(self, name, data):
+        """Compare with the last known CI state (kept on disk, also across launches) and notify on a transition."""
+        if data.error:
+            return
+        old = self.ci_state.data.get(name)
+        new, kind = step(old, data.ci)
+        if new != old:
+            self.ci_state.data[name] = new
+            self.ci_state.save()
+        settings, group = self.settings, self.groups.group_of(name)
+        if not (settings.get_boolean('notify-ci') and group not in settings.get_strv('notify-muted')
+                and wanted(kind, settings.get_strv('notify-kinds'))):
+            return
+        if self.sent >= self.MAX_NOTES:
+            self.overflow += 1
+            return
+        self.sent += 1
+        title = self.titles.get(name) or data.name
+        text = {'failed': 'CI is failing', 'recovered': 'CI is passing again', 'broke_running': 'Running CI failed'}[kind]
+        note = Gio.Notification.new(f'{title}: {text}')
+        note.set_body(f'{group} \u00b7 {name}')
+        note.set_priority(Gio.NotificationPriority.HIGH if kind != 'recovered' else Gio.NotificationPriority.NORMAL)
+        note.set_default_action_and_target('app.open-card', GLib.Variant('s', name))
+        if url := ci_url(data.url):
+            note.add_button_with_target('Open CI', 'app.open-ci', GLib.Variant('s', url))
+        self.get_application().send_notification(f'ci-{name}', note)
+
+    def _flush_overflow(self):
+        if self.overflow:
+            note = Gio.Notification.new(f'{self.overflow} more repositories changed CI state')
+            self.get_application().send_notification('ci-overflow', note)
+        self.sent = self.overflow = 0
 
     def _flush_marks(self):
         self.marks_scheduled = 0
