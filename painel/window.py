@@ -497,7 +497,7 @@ class Window(Adw.ApplicationWindow):
             self.pending += 1
             self.pool.submit(self._worker, name, tokens[host])
         if self.pending:
-            self.refresh_button.set_child(Adw.Spinner())
+            self.refresh_button.set_child(Gtk.Spinner(spinning=True))
 
     def _worker(self, name, token):
         try:
