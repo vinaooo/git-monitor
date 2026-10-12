@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 
 from . import repo_id
+from .cadence import Pace
 from .card import Card
 from .chips import chips_for
 from .group_page import GroupPage
@@ -19,6 +20,7 @@ from .intervals import IntervalStore
 from .motion import Slot
 from .notify import StateStore, ci_url, step, wanted
 from .prefs import Prefs
+from .rate_limit import MIN_SECONDS
 from .search import matches
 from .status import RepoStatus
 from .sorting import sorted_order
@@ -46,8 +48,9 @@ class Window(Adw.ApplicationWindow):
         self.connect('close-request', self._on_close_request)
         self.query, self.results_scheduled = '', 0
         self.vpages, self.mirrors, self.virtual_active, self.virtual_scheduled = {}, {}, False, 0  # virtual groups
-        self.cards, self.pages, self.timers = {}, {}, []  # timers: one refresh source per group
-        self.pending, self.inflight, self.marks_scheduled = 0, set(), 0
+        self.cards, self.pages, self.timers = {}, {}, {}  # timers: group -> its refresh source
+        self.fast, self.paces, self.slow, self.last = {}, {}, {}, {}  # group -> fast-lane source / Pace / delay; repo -> last RepoStatus
+        self.pending, self.inflight, self.marks_scheduled = 0, {}, 0  # inflight: repo -> the group whose pass it belongs to
         self.group_marks, self.sidebar_marks = {}, {}  # group name -> [severity]; TabPage -> its sidebar marks box
         self.pool = ThreadPoolExecutor(max_workers=4)  # ponytail: fixed 4 workers, make it a setting if hosts rate-limit
         self.titles = TitleStore(settings.get_value('titles').unpack(),
@@ -77,9 +80,9 @@ class Window(Adw.ApplicationWindow):
         self._apply_view()
         self._apply_sort()
         self._update_actions()
+        self.restart_timers()  # before the first refresh: its results feed each group's pace
         self.refresh()
         self.tab_view.connect('notify::selected-page', lambda *_: self._on_group_focused())
-        self.restart_timers()
         settings.connect('changed::refresh-seconds', lambda *_: self.restart_timers())
         settings.connect('changed::sync-imported', lambda *_: self._sync_sources())
         GLib.timeout_add_seconds(5, lambda: self._sync_sources() or GLib.SOURCE_REMOVE)  # not on the startup path
@@ -648,7 +651,8 @@ class Window(Adw.ApplicationWindow):
         group, current = self._selected_group(), self.intervals.get(self._selected_group())
         github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups.repos(group))
         rows = IntervalRows(self.settings.get_int('refresh-seconds'), current, github,
-                            bool(self.tokens.get(repo_id.GITHUB_HOST)), self._others_load(exclude=group))
+                            bool(self.tokens.get(repo_id.GITHUB_HOST)), self._others_load(exclude=group),
+                            self.service.not_modified_ratio())
         src = next((x for x in self.sources.all() if x[0] == group), None)
         GroupSettingsDialog(group, rows, current, lambda seconds: (self.intervals.set(group, seconds),
                                                                    self.restart_timers()),
@@ -850,12 +854,57 @@ class Window(Adw.ApplicationWindow):
 
     # --- refresh ---
     def restart_timers(self):
-        """One timer per group at its own interval (the global one unless the group has a custom one)."""
-        for source in self.timers:
+        """One timer per group; its base interval is the group's own (the global one unless it has a custom one)."""
+        for source in (*self.timers.values(), *self.fast.values()):
             GLib.source_remove(source)
-        default = self.settings.get_int('refresh-seconds')
-        self.timers = [GLib.timeout_add_seconds(self.intervals.effective(group, default), self._tick, group)
-                       for group in self.groups.names()]
+        self.timers, self.fast = {}, {}
+        self.paces = {group: self.paces.get(group) or Pace() for group in self.groups.names()}
+        for group in self.groups.names():
+            self._schedule(group)
+
+    def _base(self, group):
+        return self.intervals.effective(group, self.settings.get_int('refresh-seconds'))
+
+    def _wait(self, group):
+        """Seconds the servers of this group's repos asked us to stay away (Retry-After, exhausted quota)."""
+        return max((self.service.wait(h) for h in {repo_id.host_of(r) for r in self.groups.repos(group)}), default=0)
+
+    def _schedule(self, group):
+        """Arm the group's next pass: its base interval, slower while idle or failing, never before the server allows."""
+        if source := self.timers.pop(group, None):
+            GLib.source_remove(source)
+        pace = self.paces.get(group)
+        if pace is None:  # deleted or renamed: restart_timers handles the new name
+            return
+        delay = int(pace.delay(self._base(group), self._wait(group)))
+        self.timers[group] = GLib.timeout_add_seconds(delay, self._tick, group)
+        self.slow[group] = delay
+        self._schedule_fast(group)
+
+    def _schedule_fast(self, group):
+        """While a repo's CI runs, poll just those repos 3x faster than the group (304s keep it cheap)."""
+        if source := self.fast.pop(group, None):
+            GLib.source_remove(source)
+        if not self._running(group) or self._anonymous_github(group):  # anonymous 304s cost quota: 60/h can't afford it
+            return
+        delay = max(MIN_SECONDS, self._base(group) // 3, int(self._wait(group)) + 1)
+        if delay < self.slow.get(group, 0):
+            self.fast[group] = GLib.timeout_add_seconds(delay, self._fast_tick, group)
+
+    def _anonymous_github(self, group):
+        return any(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups.repos(group)) \
+            and not self.tokens.get(repo_id.GITHUB_HOST)
+
+    def _running(self, group):
+        return [r for r in self.groups.repos(group) if (s := self.last.get(r)) and s.ci == 'running' and not s.error]
+
+    def _fast_tick(self, group):
+        self.fast.pop(group, None)
+        if group in self.pages:
+            if self._should_refresh(group):
+                self._submit(self._running(group), track=False)
+            self._schedule_fast(group)
+        return GLib.SOURCE_REMOVE
 
     def _on_close_request(self, _win):
         if not self.settings.get_boolean('run-in-background'):
@@ -863,16 +912,20 @@ class Window(Adw.ApplicationWindow):
         self.set_visible(False)  # the app is held (main.py), timers and notifications keep running
         return True
 
-    def _tick(self, group):
-        if group not in self.pages:  # renamed or deleted: restart_timers replaced this source already
-            return GLib.SOURCE_REMOVE
+    def _should_refresh(self, group):
         if self.virtual_active:  # the open virtual group keeps its member repos fresh
             visible = any(self.groups.group_of(i) == group for i in self.mirrors.get(self._selected_vid(), {}))
         else:
             visible = group == self._selected_group()
-        if visible or not self.get_visible() or self.settings.get_boolean('refresh-all-groups'):  # hidden = background mode
-            self.refresh([group])
-        return GLib.SOURCE_CONTINUE
+        return visible or not self.get_visible() or self.settings.get_boolean('refresh-all-groups')  # hidden = background mode
+
+    def _tick(self, group):
+        self.timers.pop(group, None)  # this source ends here; the next one is armed below and after each pass
+        if group in self.pages:  # renamed or deleted: restart_timers replaced this source already
+            if self._should_refresh(group):
+                self.refresh([group])
+            self._schedule(group)
+        return GLib.SOURCE_REMOVE
 
     def _on_group_focused(self):
         if not self.settings.get_boolean('refresh-all-groups'):  # otherwise it is already fresh
@@ -882,35 +935,70 @@ class Window(Adw.ApplicationWindow):
         """Refresh `groups`; by default only the visible group (saves API quota), or all with the preference."""
         if not self.tab_view.get_selected_page():
             return
-        tokens = {}
         if groups is None and self.virtual_active:
             names = list(self.mirrors.get(self._selected_vid(), {}))  # the repos of the open virtual group
         else:
             if groups is None:
                 groups = self.groups.names() if self.settings.get_boolean('refresh-all-groups') else [self._selected_group()]
             names = [name for group in groups for name in self.groups.repos(group)]
+        self._submit(names, track=True)
+
+    def _submit(self, names, track):
+        """Queue a fetch for each of `names`. Skips repos still in flight and hosts that asked us to back off.
+        GitHub repos with a token go in batched GraphQL queries. `track`: this is a group's pass (feeds its Pace)."""
+        tokens, waits, batches, started = {}, {}, {}, {}
         for name in names:
             host = repo_id.host_of(name)
             if host not in tokens:
-                tokens[host] = self.tokens.get(host)
+                tokens[host], waits[host] = self.tokens.get(host), self.service.wait(host)
+            if waits[host] > 0:
+                until = GLib.DateTime.new_now_local().add_seconds(waits[host]).format('%H:%M')
+                self.window_title.set_subtitle(f'{host} asked us to wait, resuming {until}')
+                continue
             if name in self.inflight:  # slow network: don't stack a second fetch on the same repo
                 continue
-            self.inflight.add(name)
+            group = self.groups.group_of(name)
+            self.inflight[name] = group if track else None  # fast-lane results don't count toward a pass
             self.pending += 1
-            self.pool.submit(self._worker, name, tokens[host])
+            started[group] = started.get(group, 0) + 1
+            if self.service.batch_size(host, tokens[host]):
+                batches.setdefault(host, []).append(name)
+            else:
+                self.pool.submit(self._worker, name, tokens[host])
+        for host, batch in batches.items():
+            size = self.service.batch_size(host, tokens[host])
+            for i in range(0, len(batch), size):
+                self.pool.submit(self._batch, batch[i:i + size], tokens[host])
+        if track:
+            for group, count in started.items():
+                if group in self.paces:
+                    self.paces[group].begin(count)
         if self.pending:
             self.refresh_button.set_child(Gtk.Spinner(spinning=True))
 
-    def _worker(self, name, token):
+    def _batch(self, names, token):
+        """One request for the repo + PR data of `names`; each repo then fetches its CI in parallel on the pool."""
         try:
-            data = self.service.fetch(name, token)
+            heads = self.service.heads(names, token)
+        except Exception:  # fall back to one request set per repo
+            heads = {}
+        for name in names:
+            self.pool.submit(self._worker, name, token, heads.get(name))
+
+    def _worker(self, name, token, head=None):
+        try:
+            data = self.service.fetch(name, token, head)
         except Exception as e:  # the service already maps failures; this keeps in-flight bookkeeping from leaking
             data = RepoStatus(name=name, error=str(e))
         GLib.idle_add(self._apply, name, data)
 
     def _apply(self, name, data):
-        self.inflight.discard(name)
+        group = self.inflight.pop(name, None)
         self.pending -= 1
+        previous, self.last[name] = self.last.get(name), data
+        pace = self.paces.get(group)
+        if pace and pace.result(data != previous, data.ci == 'running', bool(data.error)):
+            self._schedule(group)  # pass complete: the next delay depends on what it found
         if not self.pending:  # last result in: stop the spinner, stamp the time
             self.refresh_button.set_icon_name('view-refresh-symbolic')
             self.window_title.set_subtitle(f'Updated {GLib.DateTime.new_now_local().format("%H:%M")}')
@@ -971,4 +1059,5 @@ class Window(Adw.ApplicationWindow):
         Prefs(self.settings, self.tokens, self.cards,
               lambda msg: self.toasts.add_toast(Adw.Toast(title=msg)),  # the rest feeds the rate-limit estimate
               groups={g: self.groups.repos(g) for g in self.groups.names()}, selected=self._selected_group(),
-              custom={g: self.intervals.get(g) for g in self.groups.names() if self.intervals.get(g)}).present(self)
+              custom={g: self.intervals.get(g) for g in self.groups.names() if self.intervals.get(g)},
+              ratio=self.service.not_modified_ratio()).present(self)

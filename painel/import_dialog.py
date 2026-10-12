@@ -42,7 +42,7 @@ class ImportDialog(Adw.Dialog):
         self.list_rows = []
         picker_group = Adw.PreferencesGroup()
         picker_group.add(self.picker)
-        self.interval = IntervalRows(settings.get_int('refresh-seconds'), others=others)
+        self.interval = IntervalRows(settings.get_int('refresh-seconds'), others=others, ratio=service.not_modified_ratio())
         self.interval.connect(self._summarize)
         refresh_group = Adw.PreferencesGroup(title='Refresh')
         for row in self.interval.rows:
