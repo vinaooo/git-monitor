@@ -183,6 +183,10 @@ class Window(Adw.ApplicationWindow):
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.real_list = self._build_sidebar()
         sidebar.append(Gtk.ScrolledWindow(child=self.real_list, vexpand=True))
+        new_group = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='New group', halign=Gtk.Align.END,
+                               margin_top=6, margin_bottom=6, margin_end=6, css_classes=['flat'])
+        new_group.connect('clicked', self.ask_new_group)
+        sidebar.append(new_group)
         self.virtual_box = self._build_virtual_sidebar()
         # virtual groups sit at the bottom of the sidebar, under a separator
         self.virtual_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, visible=False)
@@ -190,10 +194,6 @@ class Window(Adw.ApplicationWindow):
         self.virtual_section.append(Gtk.ScrolledWindow(child=self.virtual_box, propagate_natural_height=True,
                                                        max_content_height=520, hscrollbar_policy=Gtk.PolicyType.NEVER))
         sidebar.append(self.virtual_section)
-        new_group = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='New group', halign=Gtk.Align.END,
-                               margin_top=6, margin_bottom=6, margin_end=6, css_classes=['flat'])
-        new_group.connect('clicked', self.ask_new_group)
-        sidebar.append(new_group)
         sidebar_view = Adw.ToolbarView(content=sidebar)
         sidebar_view.add_top_bar(sidebar_header)
 
