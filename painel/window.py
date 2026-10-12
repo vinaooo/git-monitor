@@ -7,8 +7,10 @@ from .card import Card
 from .group_page import GroupPage
 from . import importer
 from .groups import Groups
+from .group_settings import GroupSettingsDialog
 from .health import group_severity, severity
 from .import_dialog import ImportDialog
+from .interval_row import IntervalRows
 from .intervals import IntervalStore
 from .motion import Slot
 from .prefs import Prefs
@@ -80,13 +82,14 @@ class Window(Adw.ApplicationWindow):
     def _build_ui(self, app):
         menu, section = Gio.Menu(), Gio.Menu()
         for label, action in (('New group…', 'new-group'), ('Import from account…', 'import-account'),
-                              ('Rename group…', 'rename-group'), ('Delete group…', 'delete-group')):
+                              ('Rename group…', 'rename-group'), ('Group settings…', 'group-settings'),
+                              ('Delete group…', 'delete-group')):
             section.append(label, f'win.{action}')
         menu.append_section(None, section)
         for i in range(app.menu.get_n_items()):  # flatten: a section of sections loses its separators
             menu.append_section(None, app.menu.get_item_link(i, Gio.MENU_LINK_SECTION))
         self.actions = {}
-        for name, cb in (('new-group', self.ask_new_group), ('import-account', self.ask_import),
+        for name, cb in (('new-group', self.ask_new_group), ('import-account', self.ask_import), ('group-settings', self.ask_group_settings),
                          ('rename-group', self.ask_rename_group),
                          ('delete-group', lambda *_: self.tab_view.close_page(self.tab_view.get_selected_page()))):
             act = Gio.SimpleAction.new(name, None)
@@ -102,6 +105,7 @@ class Window(Adw.ApplicationWindow):
         self.tab_view.connect('notify::selected-page', lambda *_: self._update_actions())
         group_menu = Gio.Menu()
         group_menu.append('Rename…', 'win.rename-group')
+        group_menu.append('Settings…', 'win.group-settings')
         group_menu.append('Delete…', 'win.delete-group')
         self.group_menu = group_menu
         self.tab_view.set_menu_model(group_menu)
@@ -447,6 +451,14 @@ class Window(Adw.ApplicationWindow):
         self.cards[ident] = card
         self.pages[group].add_slot(ident, Slot(card))
         self._apply_sort(group)
+
+    def ask_group_settings(self, *_):
+        group, current = self._selected_group(), self.intervals.get(self._selected_group())
+        github = sum(repo_id.host_of(r) == repo_id.GITHUB_HOST for r in self.groups.repos(group))
+        rows = IntervalRows(self.settings.get_int('refresh-seconds'), current, github,
+                            bool(self.tokens.get(repo_id.GITHUB_HOST)))
+        GroupSettingsDialog(group, rows, current, lambda seconds: (self.intervals.set(group, seconds),
+                                                                   self.restart_timers())).present(self)
 
     # --- import from an account ---
     def ask_import(self, *_):
