@@ -1,6 +1,6 @@
-import threading
+from concurrent.futures import ThreadPoolExecutor
 
-from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 
 from . import repo_id
 from .card import Card
@@ -9,15 +9,25 @@ from .groups import Groups
 from .health import group_severity, severity
 from .motion import Slot
 from .prefs import Prefs
+from .status import RepoStatus
 from .sorting import sorted_order
 from .titles import TitleStore
+
+# group severity -> (icon, tooltip): a word-or-glyph twin of the colour tint
+_HEALTH_GLYPH = {'error': ('dialog-error-symbolic', 'Failing'), 'warning': ('dialog-warning-symbolic', 'Needs attention'),
+                 'accent': ('emblem-synchronizing-symbolic', 'In progress'), 'success': ('object-select-symbolic', 'All good')}
 
 
 class Window(Adw.ApplicationWindow):
     def __init__(self, app, settings, service, tokens):
-        super().__init__(application=app, title='Painel', default_width=900, default_height=600)
+        super().__init__(application=app, title='Painel', width_request=360)
         self.settings, self.service, self.tokens = settings, service, tokens
+        for key, prop in (('window-width', 'default-width'), ('window-height', 'default-height'),
+                          ('window-maximized', 'maximized')):
+            settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
         self.cards, self.pages, self.timer = {}, {}, 0
+        self.pending, self.inflight, self.marks_scheduled = 0, set(), 0
+        self.pool = ThreadPoolExecutor(max_workers=4)  # ponytail: fixed 4 workers, make it a setting if hosts rate-limit
         self.titles = TitleStore(settings.get_value('titles').unpack(),
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
         initial = settings.get_value('groups').unpack()
@@ -52,7 +62,8 @@ class Window(Adw.ApplicationWindow):
                               ('Delete group…', 'delete-group')):
             section.append(label, f'win.{action}')
         menu.append_section(None, section)
-        menu.append_section(None, app.menu)
+        for i in range(app.menu.get_n_items()):  # flatten: a section of sections loses its separators
+            menu.append_section(None, app.menu.get_item_link(i, Gio.MENU_LINK_SECTION))
         self.actions = {}
         for name, cb in (('new-group', self.ask_new_group), ('rename-group', self.ask_rename_group),
                          ('delete-group', lambda *_: self.tab_view.close_page(self.tab_view.get_selected_page()))):
@@ -67,6 +78,12 @@ class Window(Adw.ApplicationWindow):
                                                             GLib.idle_add(self._tint_tabs)))
         self.tab_view.connect('page-attached', lambda *_: GLib.idle_add(self._tint_tabs))  # tab widgets appear after this
         self.tab_view.connect('notify::selected-page', lambda *_: self._update_actions())
+        group_menu = Gio.Menu()
+        group_menu.append('Rename…', 'win.rename-group')
+        group_menu.append('Delete…', 'win.delete-group')
+        self.group_menu = group_menu
+        self.tab_view.set_menu_model(group_menu)
+        self.tab_view.connect('setup-menu', lambda _v, page: page and self.tab_view.set_selected_page(page))
         self.tab_bar = Adw.TabBar(view=self.tab_view, autohide=False)
         new_tab = Gtk.Button(icon_name='tab-new-symbolic', tooltip_text='New group', css_classes=['flat'])
         new_tab.connect('clicked', self.ask_new_group)
@@ -77,16 +94,24 @@ class Window(Adw.ApplicationWindow):
         # content pane: own header bar (title = current group), like Files
         self.window_title = Adw.WindowTitle(title='Painel', subtitle='')
         content_header = Adw.HeaderBar(title_widget=self.window_title, show_start_title_buttons=False)
-        add = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='Add repository')
-        add.connect('clicked', self.ask_repo)
-        refresh = Gtk.Button(icon_name='view-refresh-symbolic', tooltip_text='Refresh')
-        refresh.connect('clicked', lambda *_: self.refresh())
+        act = Gio.SimpleAction.new('add-repo', None)
+        act.connect('activate', self.ask_repo)
+        self.add_action(act)
+        add = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='Add repository', action_name='win.add-repo')
+        act = Gio.SimpleAction.new('refresh', None)
+        act.connect('activate', lambda *_: self.refresh())
+        self.add_action(act)
+        self.refresh_button = refresh = Gtk.Button(icon_name='view-refresh-symbolic', tooltip_text='Refresh',
+                                                   action_name='win.refresh')
+        self.sidebar_toggle = Gtk.ToggleButton(icon_name='sidebar-show-symbolic', tooltip_text='Groups', visible=False)
+        content_header.pack_start(self.sidebar_toggle)
         content_header.pack_start(add)
         content_header.pack_start(refresh)
         self.content_menu = Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu)  # tabs layout only
         content_header.pack_end(self.content_menu)
-        content_header.pack_end(Gtk.MenuButton(icon_name='view-grid-symbolic', always_show_arrow=True,
-                                               tooltip_text='View and sort', menu_model=self._build_view_menu()))
+        self.view_button = Gtk.MenuButton(icon_name='view-grid-symbolic', always_show_arrow=True,
+                                          tooltip_text='View and sort', menu_model=self._build_view_menu())
+        content_header.pack_end(self.view_button)
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         content.append(self.tab_bar)
         content.append(self.tab_view)
@@ -111,6 +136,14 @@ class Window(Adw.ApplicationWindow):
                                           max_sidebar_width=260)
         self.set_content(self.split)
 
+        # narrow window: the sidebar becomes an overlay opened by a header toggle
+        breakpoint_ = Adw.Breakpoint.new(Adw.BreakpointCondition.parse('max-width: 600sp'))
+        breakpoint_.add_setter(self.split, 'collapsed', True)
+        self.add_breakpoint(breakpoint_)
+        self.sidebar_toggle.bind_property('active', self.split, 'show-sidebar',
+                                          GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE)
+        self.split.connect('notify::collapsed', lambda *_: self._sync_toggle())
+
     def _build_view_menu(self):
         for key in ('sort', 'sort-reverse', 'view'):  # stateful actions backed by GSettings
             self.add_action(self.settings.create_action(key))
@@ -133,15 +166,24 @@ class Window(Adw.ApplicationWindow):
 
         def setup(_f, item):
             row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
-            row.append(Gtk.Label(xalign=0, hexpand=True))
+            row.append(Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END))
+            row.append(Gtk.Image(visible=False))  # health glyph: the tint alone would be colour-only
             drop = Gtk.DropTarget.new(GObject.TYPE_VARIANT, Gdk.DragAction.MOVE)
             drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident.unpack()))
             row.add_controller(drop)
+            for gesture in (Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY), Gtk.GestureLongPress()):
+                gesture.connect('pressed', lambda _g, *a: self._group_row_menu(item.get_item(), row, *a[-2:]))
+                row.add_controller(gesture)
             item.set_child(row)
 
         def bind(_f, item):
             page, row = item.get_item(), item.get_child()
-            item.bindings = [page.bind_property('title', row.get_first_child(), 'label', GObject.BindingFlags.SYNC_CREATE)]
+            label, glyph = row.get_first_child(), row.get_last_child()
+            sync = GObject.BindingFlags.SYNC_CREATE
+            item.bindings = [page.bind_property('title', label, 'label', sync),
+                             page.bind_property('indicator-icon', glyph, 'gicon', sync),
+                             page.bind_property('indicator-icon', glyph, 'visible', sync, lambda _b, icon: icon is not None),
+                             page.bind_property('tooltip', glyph, 'tooltip-text', sync)]
             def tint(*_):
                 if row.get_parent():  # the ListView row widget; not parented yet while binding
                     self._set_tint(row.get_parent(), page.get_keyword())
@@ -160,16 +202,33 @@ class Window(Adw.ApplicationWindow):
         lst.add_css_class('navigation-sidebar')
         return lst
 
+    def _group_row_menu(self, page, row, x, y):
+        self.tab_view.set_selected_page(page)  # the group actions act on the selected group
+        popover = Gtk.PopoverMenu.new_from_model(self.group_menu)
+        popover.set_has_arrow(False)
+        popover.set_halign(Gtk.Align.START)
+        popover.set_parent(row)
+        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        popover.connect('closed', lambda p: GLib.idle_add(p.unparent))
+        popover.popup()
+
     def _apply_layout(self):
         sidebar = self.settings.get_string('layout') == 'sidebar'
         self.tab_bar.set_visible(not sidebar)
         self.content_menu.set_visible(not sidebar)  # the sidebar header carries the menu otherwise
-        self.split.set_show_sidebar(sidebar)
+        self._sync_toggle()
+
+    def _sync_toggle(self):
+        """Sidebar layout: pinned when wide, closed overlay behind a toggle when collapsed. Tabs layout: none."""
+        sidebar, collapsed = self.settings.get_string('layout') == 'sidebar', self.split.get_collapsed()
+        self.sidebar_toggle.set_visible(sidebar and collapsed)
+        self.split.set_show_sidebar(sidebar and not collapsed)
 
     # --- view and sort (live: re-sorted whenever a refresh brings new numbers) ---
     def _apply_view(self):
         columns = {'grid-small': 6, 'grid-medium': 4, 'grid-large': 2, 'list': 1}
         mode = self.settings.get_string('view')
+        self.view_button.set_icon_name('view-list-symbolic' if mode == 'list' else 'view-grid-symbolic')
         for page in self.pages.values():
             page.set_view(columns[mode], mode == 'list')
 
@@ -198,6 +257,9 @@ class Window(Adw.ApplicationWindow):
             ready = sum((c.status.pr_counts or {}).get('approved', 0) for c in cards if c.status) if every else 0
             tab = self.tab_view.get_page(page)
             tab.set_keyword(sev)  # carries the severity: sidebar rows follow its notify
+            icon, text = _HEALTH_GLYPH.get(sev, (None, ''))  # shown by tabs and sidebar rows alike
+            tab.set_indicator_icon(icon and Gio.ThemedIcon.new(icon))
+            tab.set_tooltip(text)
             tab.set_title(f'{name}  ● {ready}' if ready else name)  # ● N = approved PRs/MRs ready to merge
         self._tint_tabs()
 
@@ -228,6 +290,8 @@ class Window(Adw.ApplicationWindow):
 
     def _update_actions(self):
         if self.tab_view.get_selected_page():
+            if self.split.get_collapsed():
+                self.split.set_show_sidebar(False)  # picked a group from the overlay: get out of the way
             self.window_title.set_title(self._selected_group())
             can = self.groups.can_remove(self._selected_group())
             self.actions['delete-group'].set_enabled(can)
@@ -299,7 +363,7 @@ class Window(Adw.ApplicationWindow):
     def _delete_group(self, tab_page):
         name = tab_page.get_child().name
         for repo in self.groups.repos(name):
-            self.remove_repo(repo)
+            self._drop_repo(repo)  # the whole group was confirmed: no per-repo undo
         self.groups.remove(name)
         self.pages.pop(name)
         self.tab_view.close_page_finish(tab_page, True)
@@ -320,6 +384,15 @@ class Window(Adw.ApplicationWindow):
         dlg.add_response('add', 'Add')
         dlg.set_response_appearance('add', Adw.ResponseAppearance.SUGGESTED)
         dlg.set_default_response('add')
+        dlg.set_response_enabled('add', False)  # until the text parses as a repository
+
+        def validate(_entry):
+            text = entry.get_text()
+            ok = bool(repo_id.parse(text))
+            dlg.set_response_enabled('add', ok)
+            (entry.remove_css_class if ok or not text.strip() else entry.add_css_class)('error')
+
+        entry.connect('changed', validate)
         dlg.connect('response', lambda d, r: r == 'add' and self.add_repo(entry.get_text()))
         dlg.present(self)
 
@@ -342,6 +415,24 @@ class Window(Adw.ApplicationWindow):
         self._apply_sort(self.groups.group_of(name))
 
     def remove_repo(self, name):
+        group, title = self.groups.group_of(name), self.titles.get(name)
+        self._drop_repo(name)
+        toast = Adw.Toast(title=f'Removed {name.rpartition("/")[2]}', button_label='Undo', timeout=8)
+        toast.connect('button-clicked', lambda *_: self._restore_repo(name, group, title))
+        self.toasts.add_toast(toast)
+
+    def _restore_repo(self, name, group, title):
+        if name in self.cards:
+            return
+        if group not in self.pages:  # its group was deleted meanwhile
+            group = self._selected_group()
+        self.groups.add_repo(group, name)  # appended: the old position is not kept
+        if title:
+            self.titles.set(name, title)
+        self._add_card(name, group)
+        self.refresh()
+
+    def _drop_repo(self, name):
         self.titles.remove(name)
         self.cards.pop(name)
         self.pages[self.groups.group_of(name)].remove_slot(name)
@@ -400,18 +491,38 @@ class Window(Adw.ApplicationWindow):
             host = repo_id.host_of(name)
             if host not in tokens:
                 tokens[host] = self.tokens.get(host)
-            threading.Thread(target=self._worker, args=(name, tokens[host]), daemon=True).start()
+            if name in self.inflight:  # slow network: don't stack a second fetch on the same repo
+                continue
+            self.inflight.add(name)
+            self.pending += 1
+            self.pool.submit(self._worker, name, tokens[host])
+        if self.pending:
+            self.refresh_button.set_child(Gtk.Spinner(spinning=True))
 
     def _worker(self, name, token):
-        data = self.service.fetch(name, token)
+        try:
+            data = self.service.fetch(name, token)
+        except Exception as e:  # the service already maps failures; this keeps in-flight bookkeeping from leaking
+            data = RepoStatus(name=name, error=str(e))
         GLib.idle_add(self._apply, name, data)
 
     def _apply(self, name, data):
+        self.inflight.discard(name)
+        self.pending -= 1
+        if not self.pending:  # last result in: stop the spinner, stamp the time
+            self.refresh_button.set_icon_name('view-refresh-symbolic')
+            self.window_title.set_subtitle(f'Updated {GLib.DateTime.new_now_local().format("%H:%M")}')
         card = self.cards.get(name)  # may have been removed meanwhile
         if card:
             card.update(data)
             self._apply_sort(self.groups.group_of(name))
-            self._update_marks()
+            if not self.marks_scheduled:  # a burst of results walks the tab bar once, not once per repo
+                self.marks_scheduled = GLib.idle_add(self._flush_marks)
+
+    def _flush_marks(self):
+        self.marks_scheduled = 0
+        self._update_marks()
+        return GLib.SOURCE_REMOVE
 
     def show_prefs(self):
         Prefs(self.settings, self.tokens, self.cards,

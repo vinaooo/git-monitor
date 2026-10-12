@@ -1,4 +1,4 @@
-from gi.repository import Adw, Gdk, GLib, Gtk, Pango
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from .chips import Chip, chips_for
 from .health import severity
@@ -29,14 +29,13 @@ class Card(Gtk.Box):
         self.chips = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)  # one wrapping row per group
         open_btn = Gtk.Button(label='Open in browser', halign=Gtk.Align.START)
         open_btn.connect('clicked', self._open)
-        rm = Gtk.Button(icon_name='user-trash-symbolic', tooltip_text='Remove')
-        rm.add_css_class('flat')
-        rm.connect('clicked', lambda *_: on_remove(full_name))
+        more = Gtk.MenuButton(icon_name='view-more-symbolic', tooltip_text='Card actions', css_classes=['flat'])
+        more.set_create_popup_func(lambda btn: btn.set_menu_model(self._build_menu()))  # groups change: build per opening
         bar = Gtk.Box(spacing=6)
         bar.append(open_btn)
         self.spacer = Gtk.Box(hexpand=True)
         bar.append(self.spacer)
-        bar.append(rm)
+        bar.append(more)
         self.box = box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         for w in (title_row, self.stats, self.chips, bar):
             box.append(w)
@@ -46,7 +45,7 @@ class Card(Gtk.Box):
         self.append(box)
         self._set_chips(LOADING_CHIPS)  # same rows as loaded: the card keeps its size when data arrives
         self._setup_drag_and_drop(full_name, on_drag_begin, on_drag_end)
-        self._setup_group_menu(other_groups, on_move)
+        self._setup_group_menu(other_groups, on_move, on_remove)
 
     def set_compact(self, compact):
         """List view: everything on one row instead of stacked."""
@@ -63,25 +62,51 @@ class Card(Gtk.Box):
         source.connect('drag-end', lambda *_: self._on_drag_end(ident, on_drag_end))
         self.add_controller(source)
 
-    def _setup_group_menu(self, other_groups, on_move):
-        click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
-        click.connect('pressed', lambda _g, _n, x, y: self._show_group_menu(other_groups(self.ident), on_move, x, y))
-        self.add_controller(click)
+    def _setup_group_menu(self, other_groups, on_move, on_remove):
+        """One context menu (right-click, long-press, Menu key / Shift+F10): rename, open, move, remove."""
+        self.other_groups = other_groups
+        actions = Gio.SimpleActionGroup()
+        for name, cb, param in (('rename', lambda *_: self._start_edit(), None), ('open', self._open, None),
+                                ('remove', lambda *_: on_remove(self.ident), None),
+                                ('move', lambda _a, g: on_move(self.ident, g.get_string()), GLib.VariantType('s'))):
+            act = Gio.SimpleAction.new(name, param)
+            act.connect('activate', cb)
+            actions.add_action(act)
+        self.insert_action_group('card', actions)
+        for gesture in (Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY), Gtk.GestureLongPress()):
+            gesture.connect('pressed', lambda _g, *a: self._show_menu(*a[-2:]))
+            self.add_controller(gesture)
+        keys = Gtk.EventControllerKey()
+        keys.connect('key-pressed', self._on_menu_key)
+        self.add_controller(keys)
 
-    def _show_group_menu(self, groups, on_move, x, y):
-        if not groups:
-            return
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.append(Gtk.Label(label='Move to group', xalign=0, margin_start=6, margin_bottom=4, css_classes=['dim-label']))
-        popover = Gtk.Popover(child=box, has_arrow=False, halign=Gtk.Align.START)
+    def _on_menu_key(self, _ctl, keyval, _code, state):
+        if keyval == Gdk.KEY_Menu or (keyval == Gdk.KEY_F10 and state & Gdk.ModifierType.SHIFT_MASK):
+            self._show_menu(self.get_width() / 2, self.get_height() / 2)
+            return True
+        return False
+
+    def _build_menu(self):
+        menu = Gio.Menu()
+        menu.append('Rename…', 'card.rename')
+        if self.url:
+            menu.append('Open in browser', 'card.open')
+        groups = self.other_groups(self.ident)
+        if groups:
+            moves = Gio.Menu()
+            for group in groups:
+                moves.append(group, Gio.Action.print_detailed_name('card.move', GLib.Variant('s', group)))
+            menu.append_submenu('Move to group', moves)
+        menu.append('Remove', 'card.remove')
+        return menu
+
+    def _show_menu(self, x, y):
+        popover = Gtk.PopoverMenu.new_from_model(self._build_menu())
+        popover.set_has_arrow(False)
+        popover.set_halign(Gtk.Align.START)
         popover.set_parent(self)
         popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
-        popover.connect('closed', lambda p: p.unparent())
-        for group in groups:
-            btn = Gtk.Button(label=group, halign=Gtk.Align.FILL, css_classes=['flat'])
-            btn.get_child().set_xalign(0)
-            btn.connect('clicked', lambda _b, g=group: (popover.popdown(), on_move(self.ident, g)))
-            box.append(btn)
+        popover.connect('closed', lambda p: GLib.idle_add(p.unparent))  # after the chosen action ran
         popover.popup()
 
     def _on_prepare(self, ident, x, y):
@@ -176,31 +201,39 @@ class Card(Gtk.Box):
             self._launch(self.url)
 
     def update(self, s):
+        # a failed refresh keeps the last good data on screen (dimmed) instead of wiping it
+        stale = bool(s.error and self.status and not self.status.error)
+        for css in HEALTH_CLASSES:
+            self.remove_css_class(css)
+        self.stats.remove_css_class('error')
+        self.chips.set_opacity(0.5 if stale else 1)
+        if stale:
+            self.stats.set_label(f'Couldn’t refresh · {s.error}')
+            self.stats.add_css_class('error')
+            self.add_css_class('health-error')
+            return
         self.status = s
         self.fetched_name = s.name
         self.entry.set_placeholder_text(s.name)
         self.title.set_label(self.custom_title or s.name)
-        for css in HEALTH_CLASSES:
-            self.remove_css_class(css)
         self._set_chips(chips_for(s))
         if s.error:
             self.stats.set_label(s.error)
+            self.stats.add_css_class('error')
+            self.add_css_class('health-error')
             return
         self.url = s.url
-        self.stats.set_label(f'{s.issues} open issues')
+        self.stats.set_label(f'{s.issues} open issue{"" if s.issues == 1 else "s"}')
         if severity(s) != 'none':
             self.add_css_class(f'health-{severity(s)}')
 
     def _chip_label(self, chip):
-        label = Gtk.Label(label=chip.text, css_classes=['chip', chip.css], tooltip_text=chip.tooltip or None)
-        if chip.url:  # PR/MR chips open the matching list in the browser
-            label.add_css_class('chip-link')
-            label.set_cursor(Gdk.Cursor.new_from_name('pointer'))
-            click = Gtk.GestureClick()
-            click.connect('released', lambda *_: self._launch(chip.url))
-            label.add_controller(click)
-            label.set_tooltip_text((chip.tooltip + '\n\n' if chip.tooltip else '') + 'Click to open in browser')
-        return label
+        if chip.url:  # PR/MR chips open the matching list in the browser; a real button so keyboard/Orca reach it
+            button = Gtk.Button(label=chip.text, css_classes=['flat', 'chip', 'chip-link', chip.css],
+                                tooltip_text=(chip.tooltip + '\n\n' if chip.tooltip else '') + 'Open in browser')
+            button.connect('clicked', lambda *_: self._launch(chip.url))
+            return button
+        return Gtk.Label(label=chip.text, css_classes=['chip', chip.css], tooltip_text=chip.tooltip or None)
 
     def _launch(self, url):
         Gtk.UriLauncher(uri=url).launch(self.get_root(), None, None, None)

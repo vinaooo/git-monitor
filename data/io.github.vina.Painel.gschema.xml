@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
   <schema id="io.github.vina.Painel" path="/io/github/vina/Painel/">
-    <key name="repos" type="as"><default>[]</default><summary>Legacy flat repository list, only migrated into groups</summary></key>
+    <key name="window-width" type="i"><default>900</default><summary>Window width</summary></key>
+    <key name="window-height" type="i"><default>600</default><summary>Window height</summary></key>
+    <key name="window-maximized" type="b"><default>false</default><summary>Window is maximized</summary></key>
+    <key name="repos"type="as"><default>[]</default><summary>Legacy flat repository list, only migrated into groups</summary></key>
     <key name="groups" type="a(sas)"><default>[]</default><summary>Repository groups: (name, repositories)</summary></key>
     <key name="layout" type="s"><choices><choice value="tabs"/><choice value="sidebar"/></choices><default>"sidebar"</default><summary>How groups are shown</summary></key>
     <key name="sort" type="s"><choices><choice value="manual"/><choice value="name"/><choice value="issues"/><choice value="prs"/><choice value="ci"/></choices><default>"manual"</default><summary>Card sort mode</summary></key>
