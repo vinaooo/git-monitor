@@ -34,3 +34,24 @@ def migrate(ident):
 
 def host_of(ident):
     return ident.split('/')[0]
+
+
+_NAME = re.compile(r'[\w.-]+')
+
+
+def parse_account(text, default_host=GITHUB_HOST):
+    """User/org URL, 'host/account' or bare name (-> `default_host`) -> (host, account), else None.
+    GitLab accounts may be groups with subgroups ('g/sub'); a GitHub 'owner/repo' is a repo, not an account."""
+    text = text.strip().lstrip('@')
+    if _NAME.fullmatch(text) and not _URL.match(text + '/x'):  # 'github.com' alone is a host, not a name
+        return default_host, text
+    m = _URL.match(text)
+    if not m:
+        return None
+    host = m[1].lower()
+    path = re.split(r'[?#]|/-/', m[2])[0].strip('/')
+    if host == GITHUB_HOST:
+        return (host, path) if _NAME.fullmatch(path) else None
+    if is_gitlab_host(host) and re.fullmatch(r'[\w.-]+(/[\w.-]+)*', path):
+        return host, path
+    return None
