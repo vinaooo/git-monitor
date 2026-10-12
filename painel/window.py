@@ -12,12 +12,15 @@ from .group_settings import GroupSettingsDialog
 from .health import group_severity, severity
 from .import_dialog import ImportDialog
 from .interval_row import IntervalRows
+from .icon_picker import IconPicker
+from .icons import DEFAULT as DEFAULT_ICON, IconStore
 from .intervals import IntervalStore
 from .motion import Slot
 from .prefs import Prefs
 from .search import matches
 from .status import RepoStatus
 from .sorting import sorted_order
+from .virtual import DEFINITIONS, members, shown
 from .sources import SourceStore
 from .titles import TitleStore
 
@@ -39,6 +42,7 @@ class Window(Adw.ApplicationWindow):
                           ('window-maximized', 'maximized')):
             settings.bind(key, self, prop, Gio.SettingsBindFlags.DEFAULT)
         self.query, self.results_scheduled = '', 0
+        self.vpages, self.mirrors, self.virtual_active, self.virtual_scheduled = {}, {}, False, 0  # virtual groups
         self.cards, self.pages, self.timers = {}, {}, []  # timers: one refresh source per group
         self.pending, self.inflight, self.marks_scheduled = 0, set(), 0
         self.group_marks, self.sidebar_marks = {}, {}  # group name -> [severity]; TabPage -> its sidebar marks box
@@ -47,6 +51,9 @@ class Window(Adw.ApplicationWindow):
                                  lambda d: settings.set_value('titles', GLib.Variant('a{ss}', d)))
         self.sources = SourceStore(settings.get_value('sources').unpack(),
                                    lambda s: settings.set_value('sources', GLib.Variant('a(sssasas)', s)))
+        self.icons = IconStore(settings.get_value('group-icons').unpack(),
+                               lambda d: settings.set_value('group-icons', GLib.Variant('a{ss}', d)))
+        self.sidebar_icons = {}  # TabPage -> its sidebar icon
         self.intervals = IntervalStore(settings.get_value('group-intervals').unpack(),
                                        lambda d: settings.set_value('group-intervals', GLib.Variant('a{si}', d)))
         initial = settings.get_value('groups').unpack()
@@ -73,6 +80,7 @@ class Window(Adw.ApplicationWindow):
         GLib.timeout_add_seconds(5, lambda: self._sync_sources() or GLib.SOURCE_REMOVE)  # not on the startup path
         GLib.timeout_add_seconds(SYNC_SECONDS, lambda: self._sync_sources() or GLib.SOURCE_CONTINUE)
         settings.connect('changed::view', lambda *_: self._apply_view())
+        settings.connect('changed::virtual-disabled', lambda *_: self._schedule_virtual())
         for key in ('colored-tabs', 'colored-icons'):
             settings.connect(f'changed::{key}', lambda *_: self._apply_colors())
         settings.connect('changed::refresh-all-groups', lambda *_: self._update_marks())
@@ -98,9 +106,10 @@ class Window(Adw.ApplicationWindow):
             self.actions[name] = act
 
         self.tab_view = Adw.TabView(vexpand=True)
+        self.vtab_view = Adw.TabView(vexpand=True)  # virtual groups: model + content, never persisted
         self.tab_view.connect('close-page', self._on_close_page)
         self.tab_view.connect('page-reordered', lambda *_: self.groups.set_group_order(self._tab_order()))
-        self.tab_view.connect('notify::selected-page', lambda *_: (self._update_actions(), self.body.set_visible_child_name('groups')))  # picking a group drills into it
+        self.tab_view.connect('notify::selected-page', lambda *_: self._show_real())  # picking a group drills into it
         group_menu = Gio.Menu()
         group_menu.append('Rename…', 'win.rename-group')
         group_menu.append('Settings…', 'win.group-settings')
@@ -150,6 +159,7 @@ class Window(Adw.ApplicationWindow):
         clamp = Adw.Clamp(child=self.results, maximum_size=760, margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
         self.body = Gtk.Stack(vexpand=True, transition_type=Gtk.StackTransitionType.CROSSFADE)  # groups | search results
         self.body.add_named(self.tab_view, 'groups')
+        self.body.add_named(self.vtab_view, 'virtual')
         self.body.add_named(Gtk.ScrolledWindow(child=clamp), 'results')
         content.append(self.body)
         content_view = Adw.ToolbarView(content=content)
@@ -161,7 +171,15 @@ class Window(Adw.ApplicationWindow):
                                        show_end_title_buttons=False)
         sidebar_header.pack_end(Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu))
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        sidebar.append(Gtk.ScrolledWindow(child=self._build_sidebar(), vexpand=True))
+        self.real_list = self._build_sidebar()
+        sidebar.append(Gtk.ScrolledWindow(child=self.real_list, vexpand=True))
+        self.virtual_list = self._build_virtual_sidebar()
+        # virtual groups sit at the bottom of the sidebar, under a separator
+        self.virtual_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, visible=False)
+        self.virtual_section.append(Gtk.Separator())
+        self.virtual_section.append(Gtk.ScrolledWindow(child=self.virtual_list, propagate_natural_height=True,
+                                                       max_content_height=300, hscrollbar_policy=Gtk.PolicyType.NEVER))
+        sidebar.append(self.virtual_section)
         new_group = Gtk.Button(icon_name='list-add-symbolic', tooltip_text='New group', halign=Gtk.Align.END,
                                margin_top=6, margin_bottom=6, margin_end=6, css_classes=['flat'])
         new_group.connect('clicked', self.ask_new_group)
@@ -202,12 +220,16 @@ class Window(Adw.ApplicationWindow):
         factory = Gtk.SignalListItemFactory()
 
         def setup(_f, item):
-            row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
+            row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12, spacing=10)
+            row.append(Gtk.Image())
             row.append(Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END))
             row.append(Gtk.Box(spacing=4))  # group marks, filled by _update_marks: the tint alone would be colour-only
             drop = Gtk.DropTarget.new(GObject.TYPE_VARIANT, Gdk.DragAction.MOVE)
             drop.connect('drop', lambda _t, ident, *_: self._drop_on_page(item.get_item(), ident.unpack()))
             row.add_controller(drop)
+            click = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
+            click.connect('released', lambda *_: self._show_real())  # also when the clicked row was already selected
+            row.add_controller(click)
             for gesture in (Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY), Gtk.GestureLongPress()):
                 gesture.connect('pressed', lambda _g, *a: self._group_row_menu(item.get_item(), row, *a[-2:]))
                 row.add_controller(gesture)
@@ -216,7 +238,10 @@ class Window(Adw.ApplicationWindow):
         def bind(_f, item):
             page, row = item.get_item(), item.get_child()
             marks = row.get_last_child()
-            item.bindings = [page.bind_property('title', row.get_first_child(), 'label', GObject.BindingFlags.SYNC_CREATE)]
+            icon = row.get_first_child()
+            icon.set_from_icon_name(self.icons.get(page.get_child().name))
+            self.sidebar_icons[page] = icon
+            item.bindings = [page.bind_property('title', icon.get_next_sibling(), 'label', GObject.BindingFlags.SYNC_CREATE)]
             self.sidebar_marks[page] = marks
             self._fill_marks(marks, self.group_marks.get(page.get_child().name, []))
             def tint(*_):
@@ -229,13 +254,37 @@ class Window(Adw.ApplicationWindow):
         def unbind(_f, item):
             [b.unbind() for b in item.bindings]
             self.sidebar_marks.pop(item.get_item(), None)
+            self.sidebar_icons.pop(item.get_item(), None)
             item.get_item().disconnect(item.tint_handler)
 
         factory.connect('setup', setup)
         factory.connect('bind', bind)
         factory.connect('unbind', unbind)
-        lst = Gtk.ListView(model=self.tab_view.get_pages(), factory=factory)
+        lst = Gtk.ListView(model=self.tab_view.get_pages(), factory=factory)  # not single_click_activate: it also selects rows on hover
         lst.add_css_class('navigation-sidebar')
+        return lst
+
+    def _build_virtual_sidebar(self):
+        factory = Gtk.SignalListItemFactory()
+
+        def setup(_f, item):
+            row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12, spacing=10)
+            row.append(Gtk.Image())
+            row.append(Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END))
+            click = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
+            click.connect('released', lambda *_: self._show_virtual())
+            row.add_controller(click)
+            item.set_child(row)
+
+        def bind(_f, item):
+            page, row = item.get_item(), item.get_child()
+            row.get_first_child().set_from_icon_name(next(d.icon for d in DEFINITIONS if d.id == page.get_child().name))
+            item.binding = page.bind_property('title', row.get_last_child(), 'label', GObject.BindingFlags.SYNC_CREATE)
+
+        factory.connect('setup', setup)
+        factory.connect('bind', bind)
+        factory.connect('unbind', lambda _f, item: item.binding.unbind())
+        lst = Gtk.ListView(model=self.vtab_view.get_pages(), factory=factory, css_classes=['navigation-sidebar', 'dim-selection'])
         return lst
 
     def _group_row_menu(self, page, row, x, y):
@@ -263,8 +312,13 @@ class Window(Adw.ApplicationWindow):
         columns = {'grid-small': 6, 'grid-medium': 4, 'grid-large': 2, 'list': 1}
         mode = self.settings.get_string('view')
         self.view_button.set_icon_name('view-list-symbolic' if mode == 'list' else 'view-grid-symbolic')
-        for page in self.pages.values():
+        for page in [*self.pages.values(), *self.vpages.values()]:
             page.set_view(columns[mode], mode == 'list')
+
+    def _apply_view_to(self, page):
+        columns = {'grid-small': 6, 'grid-medium': 4, 'grid-large': 2, 'list': 1}
+        mode = self.settings.get_string('view')
+        page.set_view(columns[mode], mode == 'list')
 
     def _apply_sort(self, group=None):
         mode, reverse = self.settings.get_string('sort'), self.settings.get_boolean('sort-reverse')
@@ -273,6 +327,7 @@ class Window(Adw.ApplicationWindow):
             info = {i: (self.cards[i].title.get_label(), self.cards[i].status) for i in order}
             self.pages[name].apply_order(sorted_order(order, mode, reverse, info))
         self._refilter(group)
+        self._schedule_virtual()
 
     # --- search (all groups; the tab / sidebar title carries the match count) ---
     def _refilter(self, group=None):
@@ -292,12 +347,12 @@ class Window(Adw.ApplicationWindow):
             self.search_entry.grab_focus()
         else:
             self.search_entry.set_text('')
-            self.body.set_visible_child_name('groups')
+            self._show_body()
 
     def _on_search_changed(self, entry):
         self.query = entry.get_text()
         self._refilter()
-        self.body.set_visible_child_name('results' if self.query.strip() else 'groups')
+        self._show_body()
 
     def _fill_results(self):
         """One list of every matching card across groups: title, group, and the same CI / PR words the card shows."""
@@ -323,6 +378,7 @@ class Window(Adw.ApplicationWindow):
     def _open_result(self, _list, row):
         group, ident = row.group, row.ident
         self.tab_view.set_selected_page(self._tab_page(group))
+        self._show_real()  # the card may be opened from a virtual group view
         self.search_button.set_active(False)  # closes the search, clears the query
         self.set_focus(None)
 
@@ -392,13 +448,87 @@ class Window(Adw.ApplicationWindow):
         return self.tab_view.get_page(self.pages[group])
 
     def _update_actions(self):
-        if self.tab_view.get_selected_page():
-            if self.split.get_collapsed():
-                self.split.set_show_sidebar(False)  # picked a group from the overlay: get out of the way
+        if self.split.get_collapsed():
+            self.split.set_show_sidebar(False)  # picked a group from the overlay: get out of the way
+        if self.virtual_active:
+            self.window_title.set_title(next(d.title for d in DEFINITIONS if d.id == self._selected_vid()))
+            for name in ('delete-group', 'rename-group', 'group-settings'):
+                self.actions[name].set_enabled(False)  # a virtual group is read-only
+        elif self.tab_view.get_selected_page():
             self.window_title.set_title(self._selected_group())
             can = self.groups.can_remove(self._selected_group())
             self.actions['delete-group'].set_enabled(can)
             self.actions['rename-group'].set_enabled(True)
+            self.actions['group-settings'].set_enabled(True)
+
+    def _show_body(self):
+        self.body.set_visible_child_name('results' if self.query.strip() else 'virtual' if self.virtual_active else 'groups')
+
+    def _show_real(self):
+        self.virtual_active = False
+        self.real_list.remove_css_class('dim-selection')  # only one sidebar row looks selected
+        self.virtual_list.add_css_class('dim-selection')
+        self._update_actions()
+        self._show_body()
+
+    def _show_virtual(self):
+        if not self.vtab_view.get_selected_page():
+            return
+        self.virtual_active = True
+        self.virtual_list.remove_css_class('dim-selection')
+        self.real_list.add_css_class('dim-selection')
+        self._update_actions()
+        self._show_body()
+        self.refresh()
+
+    def _selected_vid(self):
+        return self.vtab_view.get_selected_page().get_child().name
+
+    # --- virtual groups: read-only collections of mirror cards across all groups ---
+    def _schedule_virtual(self):
+        if not self.virtual_scheduled:  # a burst of results rebuilds once
+            self.virtual_scheduled = GLib.idle_add(self._sync_virtual)
+
+    def _make_mirror(self, ident, page):
+        card = Card(ident, self.remove_repo, self.rename_repo, lambda *_: None, lambda *_: None, self.titles.get(ident),
+                    other_groups=self.other_groups, on_move=self.move_to_group, can_drag=lambda: False)
+        if self.cards[ident].status:
+            card.update(self.cards[ident].status)
+        page.add_slot(ident, Slot(card))
+        return card
+
+    def _sync_virtual(self):
+        self.virtual_scheduled = 0
+        disabled = set(self.settings.get_strv('virtual-disabled'))
+        items = [(i, self.cards[i].status) for g in self.groups.names() for i in self.groups.repos(g) if i in self.cards]
+        by_id = {d.id: members(d, items) for d in DEFINITIONS}
+        show = shown(disabled, by_id)
+        mode, reverse = self.settings.get_string('sort'), self.settings.get_boolean('sort-reverse')
+        for n, d in enumerate(DEFINITIONS):
+            if d.id not in show:
+                if d.id in self.vpages:
+                    self.vtab_view.close_page(self.vtab_view.get_page(self.vpages.pop(d.id)))
+                    self.mirrors.pop(d.id)
+                continue
+            if d.id not in self.vpages:
+                page = GroupPage(d.id, self.groups, can_reorder=lambda: False)
+                self.vpages[d.id], self.mirrors[d.id] = page, {}
+                self.vtab_view.insert(page, sum(x.id in self.vpages for x in DEFINITIONS[:n]))
+                self._apply_view_to(page)
+            page, mirrors, want = self.vpages[d.id], self.mirrors[d.id], by_id[d.id]
+            for ident in [i for i in mirrors if i not in want]:
+                page.remove_slot(ident)
+                del mirrors[ident]
+            for ident in want:
+                if ident not in mirrors:
+                    mirrors[ident] = self._make_mirror(ident, page)
+            info = {i: (mirrors[i].title.get_label(), self.cards[i].status) for i in want}
+            page.apply_order(sorted_order(want, mode, reverse, info))
+            self.vtab_view.get_page(page).set_title(f'{d.title} ({len(want)})')
+        self.virtual_section.set_visible(bool(self.vpages))
+        if self.virtual_active and not self.vtab_view.get_selected_page():
+            self._show_real()  # the open virtual group disappeared
+        return GLib.SOURCE_REMOVE
 
     def _make_page(self, group):
         page = GroupPage(group, self.groups, can_reorder=lambda: self.settings.get_string('sort') == 'manual' and not self.query)
@@ -406,9 +536,13 @@ class Window(Adw.ApplicationWindow):
         self.tab_view.append(page).set_title(group)
         return page
 
-    def _ask_name(self, heading, label, initial, callback):
+    def _ask_name(self, heading, label, initial, callback, picker=None):
         entry = Gtk.Entry(text=initial, activates_default=True)
-        dlg = Adw.AlertDialog(heading=heading, extra_child=entry)
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        body.append(entry)
+        if picker:
+            body.append(picker)
+        dlg = Adw.AlertDialog(heading=heading, extra_child=body)
         dlg.add_response('cancel', 'Cancel')
         dlg.add_response('ok', label)
         dlg.set_response_appearance('ok', Adw.ResponseAppearance.SUGGESTED)
@@ -417,13 +551,16 @@ class Window(Adw.ApplicationWindow):
         dlg.present(self)
 
     def ask_new_group(self, *_):
-        self._ask_name('New group', 'Create', '', self.new_group)
+        picker = IconPicker(DEFAULT_ICON)
+        self._ask_name('New group', 'Create', '', lambda text: self.new_group(text, picker.value()), picker)
 
-    def new_group(self, text):
+    def new_group(self, text, icon=None):
         name = self.groups.add_group(text)
         if not name:
             self.toasts.add_toast(Adw.Toast(title='Invalid or duplicate group name'))
             return
+        if icon:
+            self.icons.set(name, icon)
         self.tab_view.set_selected_page(self._tab_page_of(self._make_page(name)))
         self.restart_timers()
 
@@ -442,6 +579,7 @@ class Window(Adw.ApplicationWindow):
             return
         self.sources.rename_group(old, new)
         self.intervals.rename_group(old, new)
+        self.icons.rename_group(old, new)
         page = self.pages.pop(old)
         page.name = new
         self.pages[new] = page
@@ -474,6 +612,7 @@ class Window(Adw.ApplicationWindow):
         self.groups.remove(name)
         self.sources.remove_group(name)
         self.intervals.remove_group(name)
+        self.icons.remove_group(name)
         self.pages.pop(name)
         self.restart_timers()
         self.tab_view.close_page_finish(tab_page, True)
@@ -505,7 +644,13 @@ class Window(Adw.ApplicationWindow):
         GroupSettingsDialog(group, rows, current, lambda seconds: (self.intervals.set(group, seconds),
                                                                    self.restart_timers()),
                             src and f'{src[1]}/{src[2]}',
-                            src and (lambda: self.ask_browse(group, src))).present(self)
+                            src and (lambda: self.ask_browse(group, src)),
+                            self.icons.get(group), lambda icon: self._set_group_icon(group, icon)).present(self)
+
+    def _set_group_icon(self, group, icon):
+        self.icons.set(group, icon)
+        if (image := self.sidebar_icons.get(self._tab_page(group))):
+            image.set_from_icon_name(icon)
 
     def ask_browse(self, group, src):
         """List every repository of the group's account (tracked ones ticked) to add more."""
@@ -618,6 +763,9 @@ class Window(Adw.ApplicationWindow):
     def rename_repo(self, name, title):
         self.titles.set(name, title)
         self.cards[name].set_custom_title(self.titles.get(name))
+        for mirrors in self.mirrors.values():
+            if name in mirrors:
+                mirrors[name].set_custom_title(self.titles.get(name))
         self._apply_sort(self.groups.group_of(name))
 
     def remove_repo(self, name):
@@ -644,6 +792,7 @@ class Window(Adw.ApplicationWindow):
         self.pages[self.groups.group_of(name)].remove_slot(name)
         self.groups.remove_repo(name)
         self._update_marks()
+        self._schedule_virtual()
 
     # --- moving between groups ---
     def other_groups(self, ident):
@@ -687,7 +836,11 @@ class Window(Adw.ApplicationWindow):
     def _tick(self, group):
         if group not in self.pages:  # renamed or deleted: restart_timers replaced this source already
             return GLib.SOURCE_REMOVE
-        if self.settings.get_boolean('refresh-all-groups') or group == self._selected_group():
+        if self.virtual_active:  # the open virtual group keeps its member repos fresh
+            visible = any(self.groups.group_of(i) == group for i in self.mirrors.get(self._selected_vid(), {}))
+        else:
+            visible = group == self._selected_group()
+        if visible or self.settings.get_boolean('refresh-all-groups'):
             self.refresh([group])
         return GLib.SOURCE_CONTINUE
 
@@ -700,9 +853,12 @@ class Window(Adw.ApplicationWindow):
         if not self.tab_view.get_selected_page():
             return
         tokens = {}
-        if groups is None:
-            groups = self.groups.names() if self.settings.get_boolean('refresh-all-groups') else [self._selected_group()]
-        names = [name for group in groups for name in self.groups.repos(group)]
+        if groups is None and self.virtual_active:
+            names = list(self.mirrors.get(self._selected_vid(), {}))  # the repos of the open virtual group
+        else:
+            if groups is None:
+                groups = self.groups.names() if self.settings.get_boolean('refresh-all-groups') else [self._selected_group()]
+            names = [name for group in groups for name in self.groups.repos(group)]
         for name in names:
             host = repo_id.host_of(name)
             if host not in tokens:
@@ -731,6 +887,9 @@ class Window(Adw.ApplicationWindow):
         card = self.cards.get(name)  # may have been removed meanwhile
         if card:
             card.update(data)
+            for mirrors in self.mirrors.values():
+                if name in mirrors:
+                    mirrors[name].update(data)
             self._apply_sort(self.groups.group_of(name))
             if not self.marks_scheduled:  # a burst of results walks the tab bar once, not once per repo
                 self.marks_scheduled = GLib.idle_add(self._flush_marks)

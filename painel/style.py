@@ -16,6 +16,7 @@ window.colored-tabs row.tint-error:selected       { background: alpha(mix(@error
 window.colored-tabs row.tint-warning:selected   { background: alpha(mix(@warning_color, white, .4), .50); }
 window.colored-tabs row.tint-accent:selected     { background: alpha(mix(@blue_3, white, .4), .52); }
 window.colored-tabs row.tint-success:selected   { background: alpha(mix(@success_color, white, .4), .44); }
+listview.dim-selection row:selected { background: none; }
 window.colored-icons .mark-error   { color: @error_color; }
 window.colored-icons .mark-warning { color: @warning_color; }
 window.colored-icons .mark-accent  { color: @blue_3; }
