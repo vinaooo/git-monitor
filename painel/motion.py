@@ -8,7 +8,7 @@ DURATION_MS = 220
 
 
 class Slot(Gtk.Box):
-    """Wraps a card; paints it displaced by `offset` without touching layout (FLIP animation)."""
+    """Wraps a card (or a sidebar row); paints it displaced by `offset` without touching layout (FLIP animation)."""
 
     def __init__(self, card):
         super().__init__()
@@ -70,3 +70,28 @@ class FlipAnimator:
                                                 Adw.CallbackAnimationTarget.new(step))
         self.animation.set_easing(Adw.Easing.EASE_OUT_CUBIC)
         self.animation.play()
+
+
+class ShiftAnimator:
+    """run({slot: (dx, dy)}): glide slots from where they are drawn now to those offsets (layout never changes)."""
+
+    def __init__(self, widget):
+        self.widget, self.animation = widget, None
+
+    def run(self, targets):
+        if self.animation:
+            self.animation.pause()
+        start = {s: s.offset for s in targets}
+
+        def step(t):
+            for s, (tx, ty) in targets.items():
+                sx, sy = start[s]
+                s.set_offset(sx + (tx - sx) * t, sy + (ty - sy) * t)
+
+        self.animation = Adw.TimedAnimation.new(self.widget, 0.0, 1.0, DURATION_MS, Adw.CallbackAnimationTarget.new(step))
+        self.animation.set_easing(Adw.Easing.EASE_OUT_CUBIC)
+        self.animation.play()
+
+    def stop(self):
+        if self.animation:
+            self.animation.pause()

@@ -1,6 +1,6 @@
 import unittest
 
-from painel.ordering import move
+from painel.ordering import move, shift_offsets, slot_at
 
 ABCD = ['a', 'b', 'c', 'd']
 
@@ -25,3 +25,23 @@ class MoveTest(unittest.TestCase):
         src = list(ABCD)
         move(src, 'a', 'c')
         self.assertEqual(src, ABCD)
+
+
+TOPS = [0, 40, 80, 120]
+
+
+class ShiftTest(unittest.TestCase):
+    def test_slot_at_nearest_center(self):
+        centers = [20, 60, 100, 140]
+        self.assertEqual(slot_at(centers, -50), 0)
+        self.assertEqual(slot_at(centers, 79), 1)
+        self.assertEqual(slot_at(centers, 500), 3)
+
+    def test_down_opens_gap_at_target(self):
+        self.assertEqual(shift_offsets(TOPS, 0, 2), [80, -40, -40, 0])
+
+    def test_up_pushes_rows_down(self):
+        self.assertEqual(shift_offsets(TOPS, 3, 1), [0, 40, 40, -80])
+
+    def test_same_slot_is_rest(self):
+        self.assertEqual(shift_offsets(TOPS, 2, 2), [0, 0, 0, 0])

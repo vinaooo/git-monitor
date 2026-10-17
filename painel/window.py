@@ -18,7 +18,8 @@ from .interval_row import IntervalRows
 from .icon_picker import IconPicker
 from .icons import DEFAULT as DEFAULT_ICON, IconStore
 from .intervals import IntervalStore
-from .motion import Slot
+from .motion import ShiftAnimator, Slot
+from .ordering import shift_offsets, slot_at
 from .notify import StateStore, ci_url, step, wanted
 from .prefs import Prefs
 from .rate_limit import MIN_SECONDS
@@ -38,6 +39,10 @@ _MARKS = {'error': ('dialog-error-symbolic', 'Failing'),
           'success': ('object-select-symbolic', 'Ready / all good')}
 
 SYNC_SECONDS = 1800  # how often imported accounts are re-listed
+
+
+class GroupDrag(GObject.Object):
+    """Drag payload of a sidebar group row: its own type, so card drop targets (variants) and other apps ignore it."""
 
 
 class Window(Adw.ApplicationWindow):
@@ -68,7 +73,8 @@ class Window(Adw.ApplicationWindow):
                                lambda d: settings.set_value('group-icons', GLib.Variant('a{ss}', d)))
         self.ci_state = StateStore(os.path.join(GLib.get_user_data_dir(), 'painel', 'ci-state.json'))
         self.sent, self.overflow = 0, 0  # notifications in the current refresh pass
-        self.sidebar_icons = {}  # TabPage -> its sidebar icon
+        self.sidebar_icons, self.sidebar_slots = {}, {}  # TabPage -> its sidebar icon / row Slot
+        self.reorder = None  # group drag in progress (see _group_drag_begin)
         self.intervals = IntervalStore(settings.get_value('group-intervals').unpack(),
                                        lambda d: settings.set_value('group-intervals', GLib.Variant('a{si}', d)))
         initial = settings.get_value('groups').unpack()
@@ -235,7 +241,7 @@ class Window(Adw.ApplicationWindow):
         factory = Gtk.SignalListItemFactory()
 
         def setup(_f, item):
-            row = Gtk.Box(margin_top=10, margin_bottom=10, margin_start=12, margin_end=12, spacing=10)
+            row = Gtk.Box(spacing=10, css_classes=['sidebar-group'])  # padding in CSS: the reorder tile must cover it
             row.append(Gtk.Image())
             row.append(Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END))
             row.append(Gtk.Box(spacing=4))  # group marks, filled by _update_marks: the tint alone would be colour-only
@@ -245,13 +251,21 @@ class Window(Adw.ApplicationWindow):
             click = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
             click.connect('released', lambda *_: self._show_real())  # also when the clicked row was already selected
             row.add_controller(click)
-            for gesture in (Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY), Gtk.GestureLongPress()):
-                gesture.connect('pressed', lambda _g, *a: self._group_row_menu(item.get_item(), row, *a[-2:]))
-                row.add_controller(gesture)
-            item.set_child(row)
+            menu = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)  # no long-press: on touch, press and move drags
+            menu.connect('pressed', lambda _g, _n, x, y: self._group_row_menu(item.get_item(), row, x, y))
+            row.add_controller(menu)
+            slot = Slot(row)  # paints the row displaced while a group is dragged
+            source = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
+            source.connect('prepare', lambda _s, x, y: self._group_drag_prepare(slot, item.get_item(), x, y))
+            source.connect('drag-begin', lambda src, _d: self._group_drag_begin(src, slot, item.get_item()))
+            source.connect('drag-end', lambda *_: GLib.idle_add(self._group_drag_end))  # after the drop, like move_to_group
+            slot.add_controller(source)
+            item.set_child(slot)
 
         def bind(_f, item):
-            page, row = item.get_item(), item.get_child()
+            page, slot = item.get_item(), item.get_child()
+            row = slot.card
+            self.sidebar_slots[page] = slot
             marks = row.get_last_child()
             icon = row.get_first_child()
             icon.set_from_icon_name(self.icons.get(page.get_child().name))
@@ -260,8 +274,8 @@ class Window(Adw.ApplicationWindow):
             self.sidebar_marks[page] = marks
             self._fill_marks(marks, self.group_marks.get(page.get_child().name, []))
             def tint(*_):
-                if row.get_parent():  # the ListView row widget; not parented yet while binding
-                    self._set_tint(row.get_parent(), page.get_keyword())
+                if slot.get_parent():  # the ListView row widget; not parented yet while binding
+                    self._set_tint(slot.get_parent(), page.get_keyword())
 
             item.tint_handler = page.connect('notify::keyword', tint)
             GLib.idle_add(tint)
@@ -270,6 +284,7 @@ class Window(Adw.ApplicationWindow):
             [b.unbind() for b in item.bindings]
             self.sidebar_marks.pop(item.get_item(), None)
             self.sidebar_icons.pop(item.get_item(), None)
+            self.sidebar_slots.pop(item.get_item(), None)
             item.get_item().disconnect(item.tint_handler)
 
         factory.connect('setup', setup)
@@ -277,7 +292,69 @@ class Window(Adw.ApplicationWindow):
         factory.connect('unbind', unbind)
         lst = Gtk.ListView(model=self.tab_view.get_pages(), factory=factory)  # not single_click_activate: it also selects rows on hover
         lst.add_css_class('navigation-sidebar')
+        drop = Gtk.DropTarget.new(GroupDrag.__gtype__, Gdk.DragAction.MOVE)  # whole list: gaps must not cancel the drop
+        drop.connect('motion', lambda _t, _x, y: self._group_drag_motion(y))
+        drop.connect('drop', lambda *_: self._group_dropped())
+        lst.add_controller(drop)
+        self.shift = ShiftAnimator(lst)
         return lst
+
+    # --- reordering groups: rows are only painted displaced; the model changes once, after the drag ---
+    def _group_drag_prepare(self, slot, page, x, y):
+        if not page:
+            return None
+        row = slot.get_parent()  # icon = the whole ListView row (selection, tint), hotspot = the grab point
+        self.grab = slot.translate_coordinates(row, x, y) or (x, y)
+        value = GObject.Value(GroupDrag, GroupDrag())
+        return Gdk.ContentProvider.new_for_value(value)
+
+    def _group_drag_begin(self, source, slot, page):
+        row = slot.get_parent()
+        source.set_icon(Gtk.WidgetPaintable.new(row).get_current_image(), int(self.grab[0]), int(self.grab[1]))
+        slots = [self.sidebar_slots.get(self.tab_view.get_nth_page(i)) for i in range(self.tab_view.get_n_pages())]
+        if None in slots:  # ponytail: a row scrolled out of view is unbound; add auto-scroll + rebinding if lists get long
+            return
+        bounds = [s.compute_bounds(self.real_list)[1] for s in slots]
+        src = self.tab_view.get_page_position(page)
+        self.reorder = {'page': page, 'slots': slots, 'src': src, 'dst': src, 'dropped': False,
+                        'tops': [b.get_y() for b in bounds], 'centers': [b.get_y() + b.get_height() / 2 for b in bounds]}
+        self.real_list.add_css_class('reordering')
+        for s in slots:
+            s.card.add_css_class('reorder-tile')
+        slot.card.add_css_class('reorder-gap')
+
+    def _group_drag_motion(self, y):
+        r = self.reorder
+        if not r:
+            return 0
+        dst = slot_at(r['centers'], y)
+        if dst != r['dst']:
+            r['dst'] = dst
+            offsets = shift_offsets(r['tops'], r['src'], dst)
+            self.shift.run({s: (0, dy) for s, dy in zip(r['slots'], offsets)})
+        return Gdk.DragAction.MOVE
+
+    def _group_dropped(self):
+        if self.reorder:
+            self.reorder['dropped'] = True
+        return bool(self.reorder)
+
+    def _group_drag_end(self):
+        r, self.reorder = self.reorder, None
+        if not r:
+            return GLib.SOURCE_REMOVE
+        self.real_list.remove_css_class('reordering')
+        for s in r['slots']:
+            s.card.remove_css_class('reorder-tile')
+            s.card.remove_css_class('reorder-gap')
+        if r['dropped'] and r['dst'] != r['src']:
+            self.shift.stop()
+            for s in r['slots']:  # same frame as the reorder: the new layout is exactly the preview, no jump
+                s.set_offset(0, 0)
+            self.tab_view.reorder_page(r['page'], r['dst'])  # page-reordered persists the order
+        else:
+            self.shift.run({s: (0, 0) for s in r['slots']})  # cancelled: glide back
+        return GLib.SOURCE_REMOVE
 
     def _build_virtual_sidebar(self):
         factory = Gtk.SignalListItemFactory()

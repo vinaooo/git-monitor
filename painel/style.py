@@ -17,6 +17,13 @@ window.colored-tabs row.tint-warning:selected   { background: alpha(mix(@warning
 window.colored-tabs row.tint-accent:selected     { background: alpha(mix(@blue_3, white, .4), .52); }
 window.colored-tabs row.tint-success:selected   { background: alpha(mix(@success_color, white, .4), .44); }
 listview.dim-selection row:selected { background: none; }
+.sidebar-group { padding: 10px 12px; }
+/* dragging a group: every row becomes a tile that moves with its content; the row's own wash would stay behind */
+listview.reordering row, listview.reordering row:hover, listview.reordering row:selected,
+window.colored-tabs listview.reordering row, window.colored-tabs listview.reordering row:selected { background: none; }
+.sidebar-group.reorder-tile { border-radius: 8px; background: alpha(currentColor, .05); box-shadow: inset 0 0 0 1px alpha(currentColor, .15); }
+.sidebar-group.reorder-gap { background: alpha(@accent_bg_color, .12); box-shadow: none; border: 2px dashed alpha(@accent_bg_color, .6); padding: 8px 10px; }
+.sidebar-group.reorder-gap > * { opacity: 0; }
 window.colored-icons .mark-error   { color: @error_color; }
 window.colored-icons .mark-warning { color: @warning_color; }
 window.colored-icons .mark-accent  { color: @blue_3; }
