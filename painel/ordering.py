@@ -15,3 +15,19 @@ def deltas(before, after, eps=0.5):
         if abs(dx) > eps or abs(dy) > eps:
             out[i] = (dx, dy)
     return out
+
+
+def slot_at(centers, y):
+    """Index of the row center nearest to y."""
+    return min(range(len(centers)), key=lambda i: abs(centers[i] - y))
+
+
+def shift_offsets(tops, src, dst):
+    """Paint offsets previewing the row at `src` moved to `dst` (rows of equal height, tops = layout y)."""
+    out = [0] * len(tops)
+    for k in range(src + 1, dst + 1):  # dragging down: rows in between move up one slot
+        out[k] = tops[k - 1] - tops[k]
+    for k in range(dst, src):  # dragging up: they move down one slot
+        out[k] = tops[k + 1] - tops[k]
+    out[src] = tops[dst] - tops[src]  # the gap sits where the row will land
+    return out
